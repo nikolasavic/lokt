@@ -315,15 +315,23 @@ func TestAcquireWithWait_PreservesTTL(t *testing.T) {
 }
 
 func TestBackoffInterval(t *testing.T) {
+	// Expected multipliers for each attempt
+	multipliers := []time.Duration{1, 2, 4, 8, 16, 32, 64}
+
 	// Test exponential growth
 	for attempt := 0; attempt < 10; attempt++ {
 		interval := backoffInterval(attempt)
 
-		// Should be at least 75% of base * 2^attempt (accounting for jitter)
-		expectedBase := baseInterval * time.Duration(1<<uint(attempt))
+		// Calculate expected base interval
+		var multiplier time.Duration = 64 // capped at attempt >= 6
+		if attempt < len(multipliers) {
+			multiplier = multipliers[attempt]
+		}
+		expectedBase := baseInterval * multiplier
 		if expectedBase > maxInterval {
 			expectedBase = maxInterval
 		}
+
 		minExpected := time.Duration(float64(expectedBase) * 0.75)
 		maxExpected := time.Duration(float64(expectedBase) * 1.25)
 

@@ -98,17 +98,22 @@ const (
 // backoffInterval calculates the next poll interval with exponential backoff and jitter.
 // Jitter is ±25% to desynchronize competing waiters.
 func backoffInterval(attempt int) time.Duration {
-	// Cap attempt to prevent overflow (2^6 * 50ms = 3.2s > maxInterval anyway)
-	if attempt > 6 {
-		attempt = 6
+	// Exponential backoff: base * 2^attempt, capped at maxInterval
+	// Use lookup table to avoid overflow concerns
+	multipliers := []time.Duration{1, 2, 4, 8, 16, 32, 64}
+	var multiplier time.Duration = 64 // default for attempt >= 6
+	if attempt < len(multipliers) {
+		multiplier = multipliers[attempt]
 	}
-	// Exponential backoff: base * 2^attempt
-	interval := baseInterval * time.Duration(1<<uint(attempt))
+
+	interval := baseInterval * multiplier
 	if interval > maxInterval {
 		interval = maxInterval
 	}
+
 	// Add jitter: multiply by 0.75 to 1.25
-	jitter := 0.75 + rand.Float64()*0.5
+	// Using math/rand is fine here - this is timing jitter, not security
+	jitter := 0.75 + rand.Float64()*0.5 //nolint:gosec // G404: jitter doesn't need crypto rand
 	return time.Duration(float64(interval) * jitter)
 }
 
