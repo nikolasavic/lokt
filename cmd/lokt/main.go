@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,9 +10,11 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
+	"github.com/nikolasavic/lokt/internal/audit"
 	"github.com/nikolasavic/lokt/internal/lock"
 	"github.com/nikolasavic/lokt/internal/root"
 	"github.com/nikolasavic/lokt/internal/stale"
@@ -54,6 +57,8 @@ func main() {
 		code = cmdStatus(args)
 	case "guard":
 		code = cmdGuard(args)
+	case "audit":
+		code = cmdAudit(args)
 	case "help", "-h", "--help":
 		usage()
 	default:
@@ -85,6 +90,9 @@ func usage() {
 	fmt.Println("    --ttl duration      Lock TTL (e.g., 5m, 1h)")
 	fmt.Println("    --wait              Wait for lock to be free")
 	fmt.Println("    --timeout duration  Maximum wait time (requires --wait)")
+	fmt.Println("  audit             Query audit log")
+	fmt.Println("    --since duration|ts Show events since (e.g., 1h, 2026-01-27T10:00:00Z)")
+	fmt.Println("    --name lock         Filter by lock name")
 	fmt.Println("  version           Show version info")
 	fmt.Println()
 	fmt.Println("Exit codes:")
@@ -129,7 +137,8 @@ func cmdLock(args []string) int {
 		return ExitError
 	}
 
-	opts := lock.AcquireOptions{TTL: *ttl}
+	auditor := audit.NewWriter(rootDir)
+	opts := lock.AcquireOptions{TTL: *ttl, Auditor: auditor}
 
 	if *wait {
 		ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -201,9 +210,11 @@ func cmdUnlock(args []string) int {
 		return ExitError
 	}
 
+	auditor := audit.NewWriter(rootDir)
 	err = lock.Release(rootDir, name, lock.ReleaseOptions{
 		Force:      *force,
 		BreakStale: *breakStale,
+		Auditor:    auditor,
 	})
 	if err != nil {
 		if errors.Is(err, lock.ErrNotFound) {
@@ -367,7 +378,8 @@ func cmdGuard(args []string) int {
 		return ExitError
 	}
 
-	opts := lock.AcquireOptions{TTL: *ttl}
+	auditor := audit.NewWriter(rootDir)
+	opts := lock.AcquireOptions{TTL: *ttl, Auditor: auditor}
 
 	// Acquire lock (with optional wait)
 	if *wait {
@@ -420,7 +432,7 @@ func cmdGuard(args []string) int {
 	released := false
 	releaseLock := func() {
 		if !released {
-			_ = lock.Release(rootDir, name, lock.ReleaseOptions{})
+			_ = lock.Release(rootDir, name, lock.ReleaseOptions{Auditor: auditor})
 			released = true
 		}
 	}
@@ -638,4 +650,106 @@ func pidLiveness(lock *lockFile) string {
 		return "alive"
 	}
 	return "dead"
+}
+
+func cmdAudit(args []string) int {
+	fs := flag.NewFlagSet("audit", flag.ExitOnError)
+	since := fs.String("since", "", "Show events since duration (1h, 30m) or timestamp (RFC3339)")
+	name := fs.String("name", "", "Filter by lock name")
+	_ = fs.Parse(args)
+
+	if *since == "" {
+		fmt.Fprintln(os.Stderr, "usage: lokt audit --since <duration|timestamp> [--name <lock>]")
+		fmt.Fprintln(os.Stderr, "  duration: 1h, 30m, 24h")
+		fmt.Fprintln(os.Stderr, "  timestamp: 2026-01-27T10:00:00Z (RFC3339)")
+		return ExitUsage
+	}
+
+	// Parse --since: try duration first, then RFC3339
+	sinceTime, err := parseSince(*since)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: invalid --since value %q: %v\n", *since, err)
+		fmt.Fprintln(os.Stderr, "  expected duration (1h, 30m) or RFC3339 timestamp")
+		return ExitUsage
+	}
+
+	rootDir, err := root.Find()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return ExitError
+	}
+
+	auditPath := filepath.Join(rootDir, "audit.log")
+	f, err := os.Open(auditPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			// No audit log yet - empty output is fine
+			return ExitOK
+		}
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return ExitError
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+
+		var event auditEvent
+		if err := json.Unmarshal(line, &event); err != nil {
+			// Skip malformed lines
+			continue
+		}
+
+		// Filter by time
+		if event.Timestamp.Before(sinceTime) {
+			continue
+		}
+
+		// Filter by name if specified
+		if *name != "" && event.Name != *name {
+			continue
+		}
+
+		// Output matching event
+		fmt.Println(string(line))
+	}
+
+	if err := scanner.Err(); err != nil {
+		fmt.Fprintf(os.Stderr, "error reading audit log: %v\n", err)
+		return ExitError
+	}
+
+	return ExitOK
+}
+
+// auditEvent is the JSON structure for audit log entries.
+type auditEvent struct {
+	Timestamp time.Time      `json:"ts"`
+	Event     string         `json:"event"`
+	Name      string         `json:"name"`
+	Owner     string         `json:"owner"`
+	Host      string         `json:"host"`
+	PID       int            `json:"pid"`
+	TTLSec    int            `json:"ttl_sec,omitempty"`
+	Extra     map[string]any `json:"extra,omitempty"`
+}
+
+// parseSince parses a duration string (e.g., "1h", "30m") or RFC3339 timestamp.
+// Returns the time after which events should be shown.
+func parseSince(s string) (time.Time, error) {
+	// Try duration first
+	if d, err := time.ParseDuration(s); err == nil {
+		return time.Now().Add(-d), nil
+	}
+
+	// Try RFC3339 timestamp
+	if t, err := time.Parse(time.RFC3339, s); err == nil {
+		return t, nil
+	}
+
+	return time.Time{}, fmt.Errorf("not a valid duration or RFC3339 timestamp")
 }
