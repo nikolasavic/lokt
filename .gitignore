@@ -1,5 +1,6 @@
 # Binaries
 /lokt
+/dist/
 *.exe
 *.dll
 *.so
