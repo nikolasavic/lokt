@@ -44,12 +44,12 @@
 
 | Ticket | Title                                   | Status  | Notes |
 | ------ | --------------------------------------- | ------- | ----- |
-| L-130  | Parse duration flags (`--ttl`, etc.)     | in-progress | beads:lokt-b0a |
-| L-131  | Compute expiry + mark expired in status  | backlog | `acquired_ts + ttl_sec`. |
-| L-132  | `unlock --break-stale` (expired only)    | backlog | Refuse if not expired. |
-| L-133  | PID liveness check (unix)                | backlog | `kill(pid,0)` to avoid breaking live locks. |
-| L-134  | Non-unix fallback stale policy           | backlog | Conservative behavior + docs. |
-| L-135  | `status --prune-expired`                 | backlog | Optional auto-clean expired locks. |
+| L-130  | Parse duration flags (`--ttl`, etc.)     | done | TTL validation, rejects negative values. |
+| L-131  | Compute expiry + mark expired in status  | done | Status shows [EXPIRED] marker. |
+| L-132  | `unlock --break-stale` (expired only)    | done | Also breaks dead-PID locks on same host. |
+| L-133  | PID liveness check (unix)                | done | `internal/stale` package with `kill(pid,0)`. |
+| L-134  | Non-unix fallback stale policy           | done | Windows returns true (conservative). |
+| L-135  | `status --prune-expired`                 | done | Auto-removes expired locks while listing. |
 
 ## Waiting + Backoff
 
