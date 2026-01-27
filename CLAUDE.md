@@ -6,6 +6,121 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Lokt is a file-based lock manager written in Go. It provides CLI commands for acquiring, releasing, and managing locks to coordinate concurrent processes (e.g., multiple AI agents working in the same repository).
 
+## Development Workflow
+
+This project uses beads for task tracking. For most changes, follow this flow:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  1. Pick work from bd ready or user request                 │
+│                         ↓                                   │
+│  2. Implement (small changes) or /plan (complex changes)    │
+│                         ↓                                   │
+│  3. Test: go test ./... && golangci-lint run                │
+│                         ↓                                   │
+│  4. /commit (APPROVAL checkpoint)                           │
+│                         ↓                                   │
+│  5. bd sync --flush-only                                    │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### When to Plan vs Just Implement
+
+**Use /plan or EnterPlanMode for:**
+- New commands or subcommands
+- Changes affecting multiple packages
+- Protocol changes (lockfile format, audit log schema)
+- Anything touching atomic file operations or concurrency
+
+**Skip planning for:**
+- Single-file bug fixes with clear scope
+- Documentation updates
+- Flag additions to existing commands
+- Test additions for existing behavior
+- Direct user requests with explicit instructions
+
+**When in doubt:** Ask the user if they want planning or a quick fix.
+
+### Agent Behavior
+
+The agent should guide the workflow, not just respond:
+
+1. **Before implementing**: For non-trivial changes, suggest planning first
+2. **After completing work**: Run tests and lint before offering to commit
+3. **When skipping steps**: Briefly note why (e.g., "Skipping /plan for this flag addition")
+
+### Agent Rules (MUST follow)
+
+**Mandatory Checkpoints (require human approval):**
+
+| Action | Correct Approach | NEVER Do |
+|--------|------------------|----------|
+| Commits | Use `/commit` skill | Raw `git commit` |
+| Push to remote | Ask user to approve | Raw `git push` |
+| Breaking changes | Discuss impact first | Silent protocol changes |
+
+**Lint-on-Edit:** After editing Go files, run:
+```bash
+go test ./...        # Run tests
+golangci-lint run    # Lint check
+```
+
+## Tooling
+
+### Git Hooks
+
+Hooks are versioned in `util/hooks/` and enforce quality on commit:
+
+| Hook | Checks |
+|------|--------|
+| `pre-commit` | gofmt, golangci-lint, beads flush |
+| `commit-msg` | Conventional commit format, blocks LLM ads |
+| `post-merge` | Beads sync after pull |
+
+```bash
+./util/install-hooks.sh           # Install hooks
+./util/install-hooks.sh status    # Show status
+./util/install-hooks.sh uninstall # Remove hooks
+```
+
+New clones should run `./util/install-hooks.sh` after cloning.
+
+### Build Script
+
+For versioned builds with ldflags:
+```bash
+./scripts/build.sh          # Build with git describe version
+./scripts/build.sh v1.0.0   # Build with explicit version
+```
+
+### Linter Configuration
+
+Project uses `.golangci.yml` with these linters enabled:
+- errcheck, gosimple, govet, staticcheck, unused (defaults)
+- gofmt, goimports, misspell, gosec, gocritic, revive (additional)
+
+### Editor Config
+
+`.editorconfig` ensures consistent formatting:
+- Go: tabs
+- YAML/JSON/Markdown: 2 spaces
+- Shell: 4 spaces
+
+### Beads Task Tracking
+
+This project uses **beads** (`bd`) for task tracking:
+
+```bash
+bd ready                    # Find available work (no blockers)
+bd create --title="..." --type=task --priority=2  # Create task
+bd show <id>                # View issue details
+bd update <id> --status=in_progress  # Claim work
+bd close <id>               # Complete work
+bd sync --flush-only        # Export to JSONL
+```
+
+**Priority values:** 0-4 (0=critical, 2=medium, 4=backlog). NOT "high"/"medium"/"low".
+
 ## Build Commands
 
 ```bash
@@ -70,3 +185,39 @@ Append-only JSONL at `<root>/audit.log` with events: acquire, deny, release, for
 - **Lock names**: Validated pattern `[A-Za-z0-9._-]+`; reject `..` and absolute paths
 - **Owner identity**: From `LOKT_OWNER` env, falling back to OS username
 - **Atomic writes**: All file operations use atomic write + fsync pattern
+
+## Git Workflow
+
+- **Conventional commits required** - see format below
+- Keep commits atomic and focused
+- Use `/commit` skill for proper formatting
+
+### Conventional Commit Format
+
+```
+<type>(<scope>): <description>
+
+[optional body]
+```
+
+**Types:**
+| Type | Use for |
+|------|---------|
+| `feat` | New feature or capability |
+| `fix` | Bug fix |
+| `docs` | Documentation only |
+| `refactor` | Code change that neither fixes a bug nor adds a feature |
+| `test` | Adding or updating tests |
+| `chore` | Maintenance (deps, config, scripts) |
+
+**Scope** (optional): `cli`, `lock`, `guard`, `stale`, `audit`, `root`
+
+**Examples:**
+```
+feat(cli): add --break-stale flag to unlock command
+fix(lock): handle race condition in atomic acquire
+docs: update CLAUDE.md with workflow guidance
+refactor(guard): extract signal handling to helper
+test(stale): add PID liveness edge cases
+chore(deps): update cobra to v1.8.0
+```

@@ -1,0 +1,69 @@
+# golangci-lint configuration
+# Run: golangci-lint run
+
+run:
+  timeout: 5m
+  modules-download-mode: readonly
+
+linters:
+  enable:
+    # Default linters
+    - errcheck      # Check for unchecked errors
+    - gosimple      # Simplify code
+    - govet         # Go vet
+    - ineffassign   # Detect unused assignments
+    - staticcheck   # Static analysis
+    - unused        # Find unused code
+
+    # Additional useful linters
+    - gofmt         # Check formatting
+    - goimports     # Check imports
+    - misspell      # Catch typos
+    - unconvert     # Remove unnecessary conversions
+    - unparam       # Find unused parameters
+    - gosec         # Security issues
+    - errname       # Error naming conventions
+    - errorlint     # Error wrapping issues
+    - gocritic      # Opinionated linter
+    - revive        # Fast, configurable linter
+
+linters-settings:
+  errcheck:
+    check-type-assertions: true
+    check-blank: true
+
+  govet:
+    enable-all: true
+
+  goimports:
+    local-prefixes: github.com/nikolasavic/lokt
+
+  gocritic:
+    enabled-tags:
+      - diagnostic
+      - style
+      - performance
+
+  revive:
+    rules:
+      - name: blank-imports
+      - name: context-as-argument
+      - name: context-keys-type
+      - name: error-return
+      - name: error-strings
+      - name: error-naming
+      - name: exported
+      - name: increment-decrement
+      - name: var-declaration
+      - name: package-comments
+      - name: range
+      - name: receiver-naming
+      - name: time-naming
+      - name: unexported-return
+      - name: indent-error-flow
+      - name: errorf
+
+issues:
+  exclude-use-default: false
+  max-issues-per-linter: 0
+  max-same-issues: 0

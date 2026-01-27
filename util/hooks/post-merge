@@ -1,0 +1,14 @@
+#!/bin/bash
+#
+# Post-merge hook for lokt
+#
+# Syncs beads after pull/merge to pick up remote changes.
+#
+
+if command -v bd >/dev/null 2>&1; then
+    if [ -d .beads ] || [ -d "$(git rev-parse --git-common-dir 2>/dev/null)/../.beads" ]; then
+        bd sync --import-only >/dev/null 2>&1 || true
+    fi
+fi
+
+exit 0
