@@ -68,7 +68,7 @@
 | Ticket | Title                                   | Status  | Notes |
 | ------ | --------------------------------------- | ------- | ----- |
 | L-140  | `lock --wait`                            | done | Poll until free. beads:lokt-eie |
-| L-141  | `--timeout` for wait                     | backlog | Abort after deadline with clear exit code. |
+| L-141  | `--timeout` for wait                     | in-progress | Abort after deadline with clear exit code. beads:lokt-4u3 |
 | L-142  | Backoff + jitter                         | backlog | Avoid thundering herd. |
 | L-143  | Wait UX (`--quiet` / periodic updates)   | backlog | Optional progress lines. |
 
