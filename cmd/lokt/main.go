@@ -13,6 +13,7 @@ import (
 
 	"github.com/nikolasavic/lokt/internal/lock"
 	"github.com/nikolasavic/lokt/internal/root"
+	"github.com/nikolasavic/lokt/internal/stale"
 )
 
 var (
@@ -23,12 +24,12 @@ var (
 
 // Exit codes
 const (
-	ExitOK        = 0
-	ExitError     = 1
-	ExitLockHeld  = 2
-	ExitNotFound  = 3
-	ExitNotOwner  = 4
-	ExitUsage     = 64
+	ExitOK       = 0
+	ExitError    = 1
+	ExitLockHeld = 2
+	ExitNotFound = 3
+	ExitNotOwner = 4
+	ExitUsage    = 64
 )
 
 func main() {
@@ -73,6 +74,7 @@ func usage() {
 	fmt.Println("    --force         Remove without ownership check (break-glass)")
 	fmt.Println("    --break-stale   Remove only if stale (expired TTL or dead PID)")
 	fmt.Println("  status [name]     Show lock status")
+	fmt.Println("    --prune-expired Remove expired locks while listing")
 	fmt.Println("  guard <name> -- <cmd...>  Run command while holding lock")
 	fmt.Println("  version           Show version info")
 	fmt.Println()
@@ -94,6 +96,11 @@ func cmdLock(args []string) int {
 		return ExitUsage
 	}
 	name := fs.Arg(0)
+
+	if *ttl < 0 {
+		fmt.Fprintln(os.Stderr, "error: TTL must be positive (e.g., 5m, 1h)")
+		return ExitUsage
+	}
 
 	rootDir, err := root.Find()
 	if err != nil {
@@ -163,6 +170,7 @@ func cmdUnlock(args []string) int {
 
 func cmdStatus(args []string) int {
 	fs := flag.NewFlagSet("status", flag.ExitOnError)
+	pruneExpired := fs.Bool("prune-expired", false, "Remove expired locks while listing")
 	fs.Parse(args)
 
 	rootDir, err := root.Find()
@@ -184,7 +192,11 @@ func cmdStatus(args []string) int {
 
 	// If a specific lock name given, show just that one
 	if fs.NArg() > 0 {
-		return showLock(rootDir, fs.Arg(0))
+		name := fs.Arg(0)
+		if *pruneExpired {
+			return showLockWithPrune(rootDir, name)
+		}
+		return showLock(rootDir, name)
 	}
 
 	// List all locks
@@ -193,14 +205,26 @@ func cmdStatus(args []string) int {
 		return ExitOK
 	}
 
+	pruned := 0
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
 		}
 		name := entry.Name()
 		if len(name) > 5 && name[len(name)-5:] == ".json" {
-			showLockBrief(rootDir, name[:len(name)-5])
+			lockName := name[:len(name)-5]
+			if *pruneExpired {
+				if pruneLockIfExpired(rootDir, lockName) {
+					pruned++
+					continue
+				}
+			}
+			showLockBrief(rootDir, lockName)
 		}
+	}
+
+	if pruned > 0 {
+		fmt.Printf("\npruned %d expired lock(s)\n", pruned)
 	}
 	return ExitOK
 }
@@ -232,6 +256,11 @@ func cmdGuard(args []string) int {
 	}
 	name := fs.Arg(0)
 	cmdArgs := args[dashIdx+1:]
+
+	if *ttl < 0 {
+		fmt.Fprintln(os.Stderr, "error: TTL must be positive (e.g., 5m, 1h)")
+		return ExitUsage
+	}
 
 	// Resolve root
 	rootDir, err := root.Find()
@@ -320,7 +349,7 @@ func showLock(rootDir, name string) int {
 	fmt.Printf("name:     %s\n", lock.Name)
 	fmt.Printf("owner:    %s\n", lock.Owner)
 	fmt.Printf("host:     %s\n", lock.Host)
-	fmt.Printf("pid:      %d\n", lock.PID)
+	fmt.Printf("pid:      %d (%s)\n", lock.PID, pidLiveness(lock))
 	fmt.Printf("age:      %s\n", age)
 	if lock.TTLSec > 0 {
 		fmt.Printf("ttl:      %ds\n", lock.TTLSec)
@@ -339,11 +368,59 @@ func showLockBrief(rootDir, name string) {
 	}
 
 	age := time.Since(lock.AcquiredAt).Truncate(time.Second)
-	expired := ""
+	status := ""
 	if lock.IsExpired() {
-		expired = " [EXPIRED]"
+		status = " [EXPIRED]"
+	} else if liveness := pidLiveness(lock); liveness == "dead" {
+		status = " [DEAD]"
 	}
-	fmt.Printf("%-20s  %s@%s  %s%s\n", name, lock.Owner, lock.Host, age, expired)
+	fmt.Printf("%-20s  %s@%s  %s%s\n", name, lock.Owner, lock.Host, age, status)
+}
+
+// showLockWithPrune shows a lock and removes it if expired.
+func showLockWithPrune(rootDir, name string) int {
+	path := root.LockFilePath(rootDir, name)
+	lf, err := readLockFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			fmt.Fprintf(os.Stderr, "lock %q not found\n", name)
+			return ExitNotFound
+		}
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return ExitError
+	}
+
+	if lf.IsExpired() {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			fmt.Fprintf(os.Stderr, "error removing lock: %v\n", err)
+			return ExitError
+		}
+		fmt.Printf("pruned expired lock %q\n", name)
+		return ExitOK
+	}
+
+	// Not expired, show normally
+	return showLock(rootDir, name)
+}
+
+// pruneLockIfExpired removes a lock if expired, returns true if pruned.
+func pruneLockIfExpired(rootDir, name string) bool {
+	path := root.LockFilePath(rootDir, name)
+	lf, err := readLockFile(path)
+	if err != nil {
+		return false
+	}
+
+	if !lf.IsExpired() {
+		return false
+	}
+
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return false
+	}
+
+	fmt.Printf("pruned: %s (expired)\n", name)
+	return true
 }
 
 func readLockFile(path string) (*lockFile, error) {
@@ -377,4 +454,16 @@ func (l *lockFile) IsExpired() bool {
 
 func parseJSON(data []byte, v interface{}) error {
 	return json.Unmarshal(data, v)
+}
+
+// pidLiveness returns "alive", "dead", or "unknown" based on PID status.
+func pidLiveness(lock *lockFile) string {
+	hostname, err := os.Hostname()
+	if err != nil || hostname != lock.Host {
+		return "unknown"
+	}
+	if stale.IsProcessAlive(lock.PID) {
+		return "alive"
+	}
+	return "dead"
 }
