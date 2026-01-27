@@ -1,6 +1,7 @@
 package lock
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -133,5 +134,182 @@ func TestAcquireCreatesDirectories(t *testing.T) {
 	}
 	if !info.IsDir() {
 		t.Error("locks should be a directory")
+	}
+}
+
+func TestAcquireWithWait_ImmediateSuccess(t *testing.T) {
+	root := t.TempDir()
+	ctx := context.Background()
+
+	// No contention, should succeed immediately
+	err := AcquireWithWait(ctx, root, "no-contention", AcquireOptions{})
+	if err != nil {
+		t.Fatalf("AcquireWithWait() error = %v", err)
+	}
+
+	// Verify lock exists
+	path := filepath.Join(root, "locks", "no-contention.json")
+	_, err = lockfile.Read(path)
+	if err != nil {
+		t.Fatalf("Lock file should exist: %v", err)
+	}
+}
+
+func TestAcquireWithWait_WaitsForRelease(t *testing.T) {
+	root := t.TempDir()
+	ctx := context.Background()
+
+	// First acquire the lock
+	err := Acquire(root, "wait-test", AcquireOptions{})
+	if err != nil {
+		t.Fatalf("Initial Acquire() error = %v", err)
+	}
+
+	// Start a goroutine that releases the lock after a short delay
+	go func() {
+		time.Sleep(150 * time.Millisecond)
+		_ = Release(root, "wait-test", ReleaseOptions{})
+	}()
+
+	// AcquireWithWait should succeed after the lock is released
+	start := time.Now()
+	err = AcquireWithWait(ctx, root, "wait-test", AcquireOptions{})
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("AcquireWithWait() error = %v", err)
+	}
+
+	// Should have waited at least 100ms (one poll cycle)
+	if elapsed < 100*time.Millisecond {
+		t.Errorf("Expected to wait, but elapsed = %v", elapsed)
+	}
+}
+
+func TestAcquireWithWait_ContextCancellation(t *testing.T) {
+	root := t.TempDir()
+
+	// Acquire lock to create contention
+	err := Acquire(root, "cancel-test", AcquireOptions{})
+	if err != nil {
+		t.Fatalf("Initial Acquire() error = %v", err)
+	}
+
+	// Create a context that cancels after a short time
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+
+	// AcquireWithWait should return context error
+	err = AcquireWithWait(ctx, root, "cancel-test", AcquireOptions{})
+	if err == nil {
+		t.Fatal("Expected error from context cancellation")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("Expected context.DeadlineExceeded, got %v", err)
+	}
+}
+
+func TestAcquireWithWait_BreaksExpiredLock(t *testing.T) {
+	root := t.TempDir()
+	ctx := context.Background()
+
+	// Create an expired lock manually
+	locksDir := filepath.Join(root, "locks")
+	if err := os.MkdirAll(locksDir, 0750); err != nil {
+		t.Fatalf("MkdirAll error = %v", err)
+	}
+
+	expiredLock := &lockfile.Lock{
+		Name:       "expired-test",
+		Owner:      "other-owner",
+		Host:       "other-host",
+		PID:        99999,
+		AcquiredAt: time.Now().Add(-10 * time.Minute), // 10 minutes ago
+		TTLSec:     60,                                // 1 minute TTL = expired
+	}
+	path := filepath.Join(locksDir, "expired-test.json")
+	if err := lockfile.Write(path, expiredLock); err != nil {
+		t.Fatalf("Write expired lock error = %v", err)
+	}
+
+	// AcquireWithWait should break the expired lock and succeed
+	err := AcquireWithWait(ctx, root, "expired-test", AcquireOptions{})
+	if err != nil {
+		t.Fatalf("AcquireWithWait() error = %v", err)
+	}
+
+	// Verify we now own the lock
+	newLock, err := lockfile.Read(path)
+	if err != nil {
+		t.Fatalf("Read new lock error = %v", err)
+	}
+	if newLock.Owner == "other-owner" {
+		t.Error("Lock should have been acquired by us, not 'other-owner'")
+	}
+}
+
+func TestAcquireWithWait_BreaksDeadPIDLock(t *testing.T) {
+	root := t.TempDir()
+	ctx := context.Background()
+
+	// Get current hostname for same-host lock
+	hostname, err := os.Hostname()
+	if err != nil {
+		t.Skipf("Cannot get hostname: %v", err)
+	}
+
+	// Create a lock with a dead PID (PID 1 is init, use unlikely PID)
+	locksDir := filepath.Join(root, "locks")
+	if err := os.MkdirAll(locksDir, 0750); err != nil {
+		t.Fatalf("MkdirAll error = %v", err)
+	}
+
+	deadPIDLock := &lockfile.Lock{
+		Name:       "dead-pid-test",
+		Owner:      "dead-process",
+		Host:       hostname, // Same host so PID check applies
+		PID:        999999,   // Very unlikely to be a real PID
+		AcquiredAt: time.Now(),
+		TTLSec:     0, // No TTL, relies on PID check
+	}
+	path := filepath.Join(locksDir, "dead-pid-test.json")
+	if err := lockfile.Write(path, deadPIDLock); err != nil {
+		t.Fatalf("Write dead PID lock error = %v", err)
+	}
+
+	// AcquireWithWait should break the dead PID lock and succeed
+	err = AcquireWithWait(ctx, root, "dead-pid-test", AcquireOptions{})
+	if err != nil {
+		t.Fatalf("AcquireWithWait() error = %v", err)
+	}
+
+	// Verify we now own the lock
+	newLock, err := lockfile.Read(path)
+	if err != nil {
+		t.Fatalf("Read new lock error = %v", err)
+	}
+	if newLock.Owner == "dead-process" {
+		t.Error("Lock should have been acquired by us, not 'dead-process'")
+	}
+}
+
+func TestAcquireWithWait_PreservesTTL(t *testing.T) {
+	root := t.TempDir()
+	ctx := context.Background()
+
+	// Acquire with TTL
+	err := AcquireWithWait(ctx, root, "ttl-wait-test", AcquireOptions{TTL: 10 * time.Minute})
+	if err != nil {
+		t.Fatalf("AcquireWithWait() error = %v", err)
+	}
+
+	// Verify TTL was set
+	path := filepath.Join(root, "locks", "ttl-wait-test.json")
+	lock, err := lockfile.Read(path)
+	if err != nil {
+		t.Fatalf("Read lock error = %v", err)
+	}
+	if lock.TTLSec != 600 {
+		t.Errorf("TTLSec = %d, want 600", lock.TTLSec)
 	}
 }
