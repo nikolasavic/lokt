@@ -70,6 +70,8 @@ func usage() {
 	fmt.Println("Commands:")
 	fmt.Println("  lock <name>       Acquire a lock")
 	fmt.Println("  unlock <name>     Release a lock")
+	fmt.Println("    --force         Remove without ownership check (break-glass)")
+	fmt.Println("    --break-stale   Remove only if stale (expired TTL or dead PID)")
 	fmt.Println("  status [name]     Show lock status")
 	fmt.Println("  guard <name> -- <cmd...>  Run command while holding lock")
 	fmt.Println("  version           Show version info")
@@ -116,11 +118,12 @@ func cmdLock(args []string) int {
 
 func cmdUnlock(args []string) int {
 	fs := flag.NewFlagSet("unlock", flag.ExitOnError)
-	force := fs.Bool("force", false, "Remove lock without ownership check")
+	force := fs.Bool("force", false, "Remove lock without ownership check (break-glass)")
+	breakStale := fs.Bool("break-stale", false, "Remove lock only if stale (expired TTL or dead PID)")
 	fs.Parse(args)
 
 	if fs.NArg() < 1 {
-		fmt.Fprintln(os.Stderr, "usage: lokt unlock [--force] <name>")
+		fmt.Fprintln(os.Stderr, "usage: lokt unlock [--force | --break-stale] <name>")
 		return ExitUsage
 	}
 	name := fs.Arg(0)
@@ -131,7 +134,10 @@ func cmdUnlock(args []string) int {
 		return ExitError
 	}
 
-	err = lock.Release(rootDir, name, lock.ReleaseOptions{Force: *force})
+	err = lock.Release(rootDir, name, lock.ReleaseOptions{
+		Force:      *force,
+		BreakStale: *breakStale,
+	})
 	if err != nil {
 		if errors.Is(err, lock.ErrNotFound) {
 			fmt.Fprintf(os.Stderr, "error: lock %q not found\n", name)
@@ -141,6 +147,11 @@ func cmdUnlock(args []string) int {
 		if errors.As(err, &notOwner) {
 			fmt.Fprintf(os.Stderr, "error: %v\n", notOwner)
 			return ExitNotOwner
+		}
+		var notStale *lock.NotStaleError
+		if errors.As(err, &notStale) {
+			fmt.Fprintf(os.Stderr, "error: %v\n", notStale)
+			return ExitError
 		}
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return ExitError
