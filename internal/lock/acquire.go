@@ -72,7 +72,9 @@ func Acquire(rootDir, name string, opts AcquireOptions) error {
 			// Lock exists - read it and return holder info
 			existing, readErr := lockfile.Read(path)
 			if readErr != nil {
-				return fmt.Errorf("lock exists but unreadable: %w", readErr)
+				// File exists but unreadable (likely being written by another process)
+				// Return a synthetic HeldError so AcquireWithWait will retry
+				return &HeldError{Lock: &lockfile.Lock{Name: name}}
 			}
 			return &HeldError{Lock: existing}
 		}
