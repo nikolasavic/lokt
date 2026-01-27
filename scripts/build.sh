@@ -12,20 +12,32 @@ set -e
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 cd "$REPO_ROOT"
 
-# Version info
-VERSION="${1:-$(git describe --tags --always --dirty 2>/dev/null || echo "dev")}"
-COMMIT="$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")"
-DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+# Build function
+do_build() {
+    VERSION="${1:-$(git describe --tags --always --dirty 2>/dev/null || echo "dev")}"
+    COMMIT="$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")"
+    DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
-# Build
-echo "Building lokt..."
-echo "  Version: $VERSION"
-echo "  Commit:  $COMMIT"
-echo "  Date:    $DATE"
+    echo "Building lokt..."
+    echo "  Version: $VERSION"
+    echo "  Commit:  $COMMIT"
+    echo "  Date:    $DATE"
 
-go build \
-    -ldflags "-X main.version=$VERSION -X main.commit=$COMMIT -X main.date=$DATE" \
-    -o lokt \
-    ./cmd/lokt
+    go build \
+        -ldflags "-X main.version=$VERSION -X main.commit=$COMMIT -X main.date=$DATE" \
+        -o lokt \
+        ./cmd/lokt
 
-echo "Done: ./lokt"
+    echo "Done: ./lokt"
+}
+
+# Use lokt guard if available (eat our own dog food)
+if command -v lokt &>/dev/null; then
+    exec lokt guard build -- bash -c "$(declare -f do_build); do_build $1"
+elif [[ -x "./lokt" ]]; then
+    exec ./lokt guard build -- bash -c "$(declare -f do_build); do_build $1"
+else
+    # First build - no lokt available yet
+    echo "(first build - no lock available)"
+    do_build "$1"
+fi

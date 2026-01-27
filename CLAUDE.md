@@ -124,8 +124,8 @@ bd sync --flush-only        # Export to JSONL
 ## Build Commands
 
 ```bash
-# Build (ALWAYS use the build script - includes version info)
-lokt guard build -- ./scripts/build.sh
+# Build (ALWAYS use the build script - includes version info + lock)
+./scripts/build.sh
 
 # Run tests
 go test ./...
@@ -137,9 +137,10 @@ go test -run TestName ./path/to/package
 golangci-lint run
 ```
 
-**Important:** Always use `lokt guard build -- ./scripts/build.sh` for builds. This:
+**Important:** Always use `./scripts/build.sh` for builds. The script:
 1. Embeds version/commit/date via ldflags
-2. Prevents concurrent build conflicts (we eat our own dog food)
+2. Auto-acquires `build` lock via lokt guard (prevents concurrent builds)
+3. First build bootstraps without lock (lokt doesn't exist yet)
 
 ## Project Layout
 
