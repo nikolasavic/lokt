@@ -29,7 +29,7 @@
 | L-100  | Resolve Lokt root (env → git → cwd)      | done | `LOKT_ROOT` → `git --git-common-dir` → `.lokt/`. |
 | L-101  | Git common dir discovery + relpath fix   | done | Handles relative `--git-common-dir` output. |
 | L-102  | Ensure dirs + permissions                | done | Creates root + `locks/` with 0700. |
-| L-103  | Lock name validation/sanitization        | backlog | Reject `..`/abs paths; allow `[A-Za-z0-9._-]`. |
+| L-103  | Lock name validation/sanitization        | done | Reject `..`/abs paths; allow `[A-Za-z0-9._-]`. beads:lokt-lb2 |
 | L-104  | Agent identity provider                  | done | `internal/identity`: owner/host/pid from env/user. |
 
 ## Lockfile Protocol
