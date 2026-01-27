@@ -71,8 +71,9 @@ func usage() {
 	fmt.Println()
 	fmt.Println("Commands:")
 	fmt.Println("  lock <name>       Acquire a lock")
-	fmt.Println("    --ttl duration  Lock TTL (e.g., 5m, 1h)")
-	fmt.Println("    --wait          Wait for lock to be free")
+	fmt.Println("    --ttl duration      Lock TTL (e.g., 5m, 1h)")
+	fmt.Println("    --wait              Wait for lock to be free")
+	fmt.Println("    --timeout duration  Maximum wait time (requires --wait)")
 	fmt.Println("  unlock <name>     Release a lock")
 	fmt.Println("    --force         Remove without ownership check (break-glass)")
 	fmt.Println("    --break-stale   Remove only if stale (expired TTL or dead PID)")
@@ -95,16 +96,27 @@ func cmdLock(args []string) int {
 	fs := flag.NewFlagSet("lock", flag.ExitOnError)
 	ttl := fs.Duration("ttl", 0, "Lock TTL (e.g., 5m, 1h)")
 	wait := fs.Bool("wait", false, "Wait for lock to be free")
+	timeout := fs.Duration("timeout", 0, "Maximum time to wait (requires --wait)")
 	_ = fs.Parse(args)
 
 	if fs.NArg() < 1 {
-		fmt.Fprintln(os.Stderr, "usage: lokt lock [--ttl duration] [--wait] <name>")
+		fmt.Fprintln(os.Stderr, "usage: lokt lock [--ttl duration] [--wait] [--timeout duration] <name>")
 		return ExitUsage
 	}
 	name := fs.Arg(0)
 
 	if *ttl < 0 {
 		fmt.Fprintln(os.Stderr, "error: TTL must be positive (e.g., 5m, 1h)")
+		return ExitUsage
+	}
+
+	if *timeout > 0 && !*wait {
+		fmt.Fprintln(os.Stderr, "error: --timeout requires --wait")
+		return ExitUsage
+	}
+
+	if *timeout < 0 {
+		fmt.Fprintln(os.Stderr, "error: --timeout must be positive (e.g., 5s, 1m)")
 		return ExitUsage
 	}
 
@@ -120,11 +132,28 @@ func cmdLock(args []string) int {
 		ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 		defer cancel()
 
+		if *timeout > 0 {
+			ctx, cancel = context.WithTimeout(ctx, *timeout)
+			defer cancel()
+		}
+
 		err = lock.AcquireWithWait(ctx, rootDir, name, opts)
 		if err != nil {
-			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			if errors.Is(err, context.Canceled) {
 				fmt.Fprintln(os.Stderr, "interrupted")
 				return ExitError
+			}
+			if errors.Is(err, context.DeadlineExceeded) {
+				// Timeout - try to get current holder info
+				path := root.LockFilePath(rootDir, name)
+				if lf, readErr := readLockFile(path); readErr == nil {
+					age := time.Since(lf.AcquiredAt).Truncate(time.Second)
+					fmt.Fprintf(os.Stderr, "error: timeout waiting for lock %q held by %s@%s (pid %d) for %s\n",
+						name, lf.Owner, lf.Host, lf.PID, age)
+				} else {
+					fmt.Fprintf(os.Stderr, "error: timeout waiting for lock %q\n", name)
+				}
+				return ExitLockHeld
 			}
 			var held *lock.HeldError
 			if errors.As(err, &held) {
