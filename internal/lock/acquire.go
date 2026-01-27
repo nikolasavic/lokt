@@ -2,6 +2,7 @@
 package lock
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"github.com/nikolasavic/lokt/internal/identity"
 	"github.com/nikolasavic/lokt/internal/lockfile"
 	"github.com/nikolasavic/lokt/internal/root"
+	"github.com/nikolasavic/lokt/internal/stale"
 )
 
 var (
@@ -84,4 +86,66 @@ func Acquire(rootDir, name string, opts AcquireOptions) error {
 	}
 
 	return nil
+}
+
+// DefaultPollInterval is the default polling interval for AcquireWithWait.
+const DefaultPollInterval = 100 * time.Millisecond
+
+// AcquireWithWait attempts to acquire a lock, polling until successful or context is cancelled.
+// If the lock is held by a stale process (expired TTL or dead PID), it will be broken automatically.
+// Returns nil on successful acquisition, ctx.Err() on cancellation, or another error on failure.
+func AcquireWithWait(ctx context.Context, rootDir, name string, opts AcquireOptions) error {
+	// First attempt without waiting
+	err := Acquire(rootDir, name, opts)
+	if err == nil {
+		return nil
+	}
+
+	var held *HeldError
+	if !errors.As(err, &held) {
+		return err // Non-held error (validation, permission, etc.), don't retry
+	}
+
+	ticker := time.NewTicker(DefaultPollInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+			// Try to break stale locks before acquiring
+			_ = tryBreakStale(rootDir, name)
+
+			err := Acquire(rootDir, name, opts)
+			if err == nil {
+				return nil
+			}
+			if !errors.As(err, &held) {
+				return err // Non-held error, don't retry
+			}
+			// Lock still held, continue polling
+		}
+	}
+}
+
+// tryBreakStale attempts to remove a lock if it's stale.
+// Returns true if the lock was removed, false otherwise.
+func tryBreakStale(rootDir, name string) bool {
+	path := root.LockFilePath(rootDir, name)
+	existing, err := lockfile.Read(path)
+	if err != nil {
+		return false
+	}
+
+	result := stale.Check(existing)
+	if !result.Stale {
+		return false
+	}
+
+	// Lock is stale, try to remove it
+	if err := os.Remove(path); err != nil {
+		return false
+	}
+	return true
 }
