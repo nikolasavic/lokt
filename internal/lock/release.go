@@ -65,6 +65,10 @@ type ReleaseOptions struct {
 // Returns NotOwnerError if caller doesn't own the lock (unless Force or BreakStale is set).
 // Returns NotStaleError if BreakStale is set but the lock is not stale.
 func Release(rootDir, name string, opts ReleaseOptions) error {
+	if err := lockfile.ValidateName(name); err != nil {
+		return err
+	}
+
 	path := root.LockFilePath(rootDir, name)
 
 	// Check if lock exists

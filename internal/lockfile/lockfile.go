@@ -3,9 +3,12 @@ package lockfile
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 	"time"
 )
 
@@ -30,6 +33,40 @@ func (l *Lock) IsExpired() bool {
 // Age returns the duration since the lock was acquired.
 func (l *Lock) Age() time.Duration {
 	return time.Since(l.AcquiredAt)
+}
+
+// ErrInvalidName is returned when a lock name fails validation.
+var ErrInvalidName = errors.New("invalid lock name")
+
+// validNamePattern matches allowed lock name characters: alphanumeric, dots, hyphens, underscores.
+var validNamePattern = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+
+// ValidateName checks if a lock name is safe and valid.
+// Returns nil if valid, or an error describing the problem.
+//
+// Valid names:
+//   - Contain only alphanumeric characters, dots, hyphens, and underscores
+//   - Are not empty
+//   - Do not contain path traversal sequences (..)
+//   - Do not start with /
+func ValidateName(name string) error {
+	if name == "" {
+		return fmt.Errorf("%w: name cannot be empty", ErrInvalidName)
+	}
+
+	if strings.HasPrefix(name, "/") {
+		return fmt.Errorf("%w: absolute paths not allowed", ErrInvalidName)
+	}
+
+	if strings.Contains(name, "..") {
+		return fmt.Errorf("%w: path traversal not allowed", ErrInvalidName)
+	}
+
+	if !validNamePattern.MatchString(name) {
+		return fmt.Errorf("%w: must contain only alphanumeric characters, dots, hyphens, and underscores", ErrInvalidName)
+	}
+
+	return nil
 }
 
 // Read parses a lock file from the given path.

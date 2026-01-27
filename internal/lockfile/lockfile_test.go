@@ -1,6 +1,7 @@
 package lockfile
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -96,5 +97,50 @@ func TestReadInvalidJSON(t *testing.T) {
 	_, err := Read(path)
 	if err == nil {
 		t.Error("Read() expected error for invalid JSON")
+	}
+}
+
+func TestValidateName(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		wantErr bool
+	}{
+		// Valid names
+		{"simple", "deploy", false},
+		{"with-hyphen", "deploy-prod", false},
+		{"with-underscore", "deploy_prod", false},
+		{"with-dot", "deploy.prod", false},
+		{"alphanumeric", "deploy123", false},
+		{"leading-dot", ".hidden", false},
+		{"complex-valid", "my-app_v1.2.3", false},
+
+		// Invalid names
+		{"empty", "", true},
+		{"absolute-path", "/tmp/evil", true},
+		{"path-traversal", "../etc/passwd", true},
+		{"path-traversal-mid", "foo/../bar", true},
+		{"double-dot-only", "..", true},
+		{"contains-double-dot", "foo..bar", true},
+		{"space", "foo bar", true},
+		{"semicolon", "foo;rm -rf", true},
+		{"pipe", "foo|cat", true},
+		{"ampersand", "foo&bar", true},
+		{"backtick", "foo`id`", true},
+		{"dollar", "foo$HOME", true},
+		{"slash", "foo/bar", true},
+		{"backslash", "foo\\bar", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateName(tt.input)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ValidateName(%q) error = %v, wantErr %v", tt.input, err, tt.wantErr)
+			}
+			if err != nil && !errors.Is(err, ErrInvalidName) {
+				t.Errorf("ValidateName(%q) error should wrap ErrInvalidName, got %v", tt.input, err)
+			}
+		})
 	}
 }

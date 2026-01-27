@@ -40,6 +40,10 @@ type AcquireOptions struct {
 // Acquire attempts to atomically acquire a lock.
 // Returns HeldError if the lock is already held.
 func Acquire(rootDir, name string, opts AcquireOptions) error {
+	if err := lockfile.ValidateName(name); err != nil {
+		return err
+	}
+
 	if err := root.EnsureDirs(rootDir); err != nil {
 		return fmt.Errorf("ensure dirs: %w", err)
 	}
