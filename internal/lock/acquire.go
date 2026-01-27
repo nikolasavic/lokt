@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand"
 	"os"
 	"time"
 
@@ -88,10 +89,31 @@ func Acquire(rootDir, name string, opts AcquireOptions) error {
 	return nil
 }
 
-// DefaultPollInterval is the default polling interval for AcquireWithWait.
-const DefaultPollInterval = 100 * time.Millisecond
+// Backoff parameters for AcquireWithWait polling.
+const (
+	baseInterval = 50 * time.Millisecond
+	maxInterval  = 2 * time.Second
+)
+
+// backoffInterval calculates the next poll interval with exponential backoff and jitter.
+// Jitter is ±25% to desynchronize competing waiters.
+func backoffInterval(attempt int) time.Duration {
+	// Cap attempt to prevent overflow (2^6 * 50ms = 3.2s > maxInterval anyway)
+	if attempt > 6 {
+		attempt = 6
+	}
+	// Exponential backoff: base * 2^attempt
+	interval := baseInterval * time.Duration(1<<uint(attempt))
+	if interval > maxInterval {
+		interval = maxInterval
+	}
+	// Add jitter: multiply by 0.75 to 1.25
+	jitter := 0.75 + rand.Float64()*0.5
+	return time.Duration(float64(interval) * jitter)
+}
 
 // AcquireWithWait attempts to acquire a lock, polling until successful or context is cancelled.
+// Uses exponential backoff with jitter to avoid thundering herd.
 // If the lock is held by a stale process (expired TTL or dead PID), it will be broken automatically.
 // Returns nil on successful acquisition, ctx.Err() on cancellation, or another error on failure.
 func AcquireWithWait(ctx context.Context, rootDir, name string, opts AcquireOptions) error {
@@ -106,14 +128,15 @@ func AcquireWithWait(ctx context.Context, rootDir, name string, opts AcquireOpti
 		return err // Non-held error (validation, permission, etc.), don't retry
 	}
 
-	ticker := time.NewTicker(DefaultPollInterval)
-	defer ticker.Stop()
-
+	attempt := 0
 	for {
+		interval := backoffInterval(attempt)
+		attempt++
+
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-ticker.C:
+		case <-time.After(interval):
 			// Try to break stale locks before acquiring
 			_ = tryBreakStale(rootDir, name)
 
@@ -124,7 +147,7 @@ func AcquireWithWait(ctx context.Context, rootDir, name string, opts AcquireOpti
 			if !errors.As(err, &held) {
 				return err // Non-held error, don't retry
 			}
-			// Lock still held, continue polling
+			// Lock still held, continue polling with increased backoff
 		}
 	}
 }

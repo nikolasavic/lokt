@@ -69,7 +69,7 @@
 | ------ | --------------------------------------- | ------- | ----- |
 | L-140  | `lock --wait`                            | done | Poll until free. beads:lokt-eie |
 | L-141  | `--timeout` for wait                     | in-progress | Abort after deadline with clear exit code. beads:lokt-4u3 |
-| L-142  | Backoff + jitter                         | backlog | Avoid thundering herd. |
+| L-142  | Backoff + jitter                         | in-progress | Avoid thundering herd. beads:lokt-7iv |
 | L-143  | Wait UX (`--quiet` / periodic updates)   | backlog | Optional progress lines. |
 
 ## Guard Command

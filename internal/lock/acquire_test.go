@@ -313,3 +313,32 @@ func TestAcquireWithWait_PreservesTTL(t *testing.T) {
 		t.Errorf("TTLSec = %d, want 600", lock.TTLSec)
 	}
 }
+
+func TestBackoffInterval(t *testing.T) {
+	// Test exponential growth
+	for attempt := 0; attempt < 10; attempt++ {
+		interval := backoffInterval(attempt)
+
+		// Should be at least 75% of base * 2^attempt (accounting for jitter)
+		expectedBase := baseInterval * time.Duration(1<<uint(attempt))
+		if expectedBase > maxInterval {
+			expectedBase = maxInterval
+		}
+		minExpected := time.Duration(float64(expectedBase) * 0.75)
+		maxExpected := time.Duration(float64(expectedBase) * 1.25)
+
+		if interval < minExpected || interval > maxExpected {
+			t.Errorf("attempt %d: interval %v outside expected range [%v, %v]",
+				attempt, interval, minExpected, maxExpected)
+		}
+	}
+
+	// After many attempts, should be capped at maxInterval (±jitter)
+	interval := backoffInterval(100)
+	if interval < time.Duration(float64(maxInterval)*0.75) {
+		t.Errorf("high attempt interval %v should be near maxInterval", interval)
+	}
+	if interval > time.Duration(float64(maxInterval)*1.25) {
+		t.Errorf("high attempt interval %v exceeds maxInterval with jitter", interval)
+	}
+}
