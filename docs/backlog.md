@@ -50,7 +50,7 @@
 | L-123  | `unlock --force` break-glass             | done | Removes without ownership validation. |
 | L-124  | `lokt status` list all locks             | done | Shows age/ttl/expired; stable text output. |
 | L-125  | `lokt status <name>` single lock view    | done | Detailed view with PID liveness. |
-| L-126  | `status --json`                          | backlog | Machine-readable output. |
+| L-126  | `status --json`                          | done | Machine-readable output. beads:lokt-z8x |
 
 ## TTL & Stale Handling
 
