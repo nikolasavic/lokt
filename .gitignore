@@ -1,5 +1,5 @@
 # Binaries
-lokt
+/lokt
 *.exe
 *.dll
 *.so
