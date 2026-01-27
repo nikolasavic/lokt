@@ -124,11 +124,8 @@ bd sync --flush-only        # Export to JSONL
 ## Build Commands
 
 ```bash
-# Build
-go build -o lokt ./cmd/lokt
-
-# Build with version info (ldflags)
-go build -ldflags "-X main.version=... -X main.commit=... -X main.date=..." -o lokt ./cmd/lokt
+# Build (ALWAYS use the build script - includes version info)
+lokt guard build -- ./scripts/build.sh
 
 # Run tests
 go test ./...
@@ -139,6 +136,10 @@ go test -run TestName ./path/to/package
 # Lint
 golangci-lint run
 ```
+
+**Important:** Always use `lokt guard build -- ./scripts/build.sh` for builds. This:
+1. Embeds version/commit/date via ldflags
+2. Prevents concurrent build conflicts (we eat our own dog food)
 
 ## Project Layout
 
