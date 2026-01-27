@@ -9,6 +9,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/nikolasavic/lokt/internal/audit"
 	"github.com/nikolasavic/lokt/internal/identity"
 	"github.com/nikolasavic/lokt/internal/lockfile"
 	"github.com/nikolasavic/lokt/internal/root"
@@ -37,7 +38,8 @@ func (e *HeldError) Unwrap() error {
 
 // AcquireOptions configures lock acquisition.
 type AcquireOptions struct {
-	TTL time.Duration
+	TTL     time.Duration
+	Auditor *audit.Writer // Optional audit writer for event logging
 }
 
 // Acquire attempts to atomically acquire a lock.
@@ -76,6 +78,8 @@ func Acquire(rootDir, name string, opts AcquireOptions) error {
 				// Return a synthetic HeldError so AcquireWithWait will retry
 				return &HeldError{Lock: &lockfile.Lock{Name: name}}
 			}
+			// Emit deny event
+			emitDenyEvent(opts.Auditor, id, name, lock.TTLSec, existing)
 			return &HeldError{Lock: existing}
 		}
 		return fmt.Errorf("create lock file: %w", err)
@@ -87,6 +91,9 @@ func Acquire(rootDir, name string, opts AcquireOptions) error {
 		_ = os.Remove(path) // Clean up on failure
 		return fmt.Errorf("write lock file: %w", err)
 	}
+
+	// Emit acquire event
+	emitAcquireEvent(opts.Auditor, id, name, lock.TTLSec)
 
 	return nil
 }
@@ -178,4 +185,40 @@ func tryBreakStale(rootDir, name string) bool {
 		return false
 	}
 	return true
+}
+
+// emitAcquireEvent emits an acquire audit event. Safe to call with nil auditor.
+func emitAcquireEvent(w *audit.Writer, id identity.Identity, name string, ttlSec int) {
+	if w == nil {
+		return
+	}
+	w.Emit(audit.Event{
+		Event:  audit.EventAcquire,
+		Name:   name,
+		Owner:  id.Owner,
+		Host:   id.Host,
+		PID:    id.PID,
+		TTLSec: ttlSec,
+	})
+}
+
+// emitDenyEvent emits a deny audit event with holder info. Safe to call with nil auditor.
+func emitDenyEvent(w *audit.Writer, id identity.Identity, name string, ttlSec int, holder *lockfile.Lock) {
+	if w == nil {
+		return
+	}
+	extra := map[string]any{
+		"holder_owner": holder.Owner,
+		"holder_host":  holder.Host,
+		"holder_pid":   holder.PID,
+	}
+	w.Emit(audit.Event{
+		Event:  audit.EventDeny,
+		Name:   name,
+		Owner:  id.Owner,
+		Host:   id.Host,
+		PID:    id.PID,
+		TTLSec: ttlSec,
+		Extra:  extra,
+	})
 }

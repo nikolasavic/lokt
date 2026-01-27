@@ -1,7 +1,9 @@
 package lock
 
 import (
+	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -9,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nikolasavic/lokt/internal/audit"
 	"github.com/nikolasavic/lokt/internal/lockfile"
 )
 
@@ -348,5 +351,112 @@ func TestBackoffInterval(t *testing.T) {
 	}
 	if interval > time.Duration(float64(maxInterval)*1.25) {
 		t.Errorf("high attempt interval %v exceeds maxInterval with jitter", interval)
+	}
+}
+
+// readAuditEvents reads all events from the audit log file.
+func readAuditEvents(t *testing.T, rootDir string) []audit.Event {
+	t.Helper()
+	path := filepath.Join(rootDir, "audit.log")
+	f, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		t.Fatalf("Open audit.log: %v", err)
+	}
+	defer f.Close()
+
+	var events []audit.Event
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		var e audit.Event
+		if err := json.Unmarshal(scanner.Bytes(), &e); err != nil {
+			t.Fatalf("Unmarshal audit event: %v", err)
+		}
+		events = append(events, e)
+	}
+	return events
+}
+
+func TestAcquireEmitsAuditEvent(t *testing.T) {
+	root := t.TempDir()
+	auditor := audit.NewWriter(root)
+
+	err := Acquire(root, "audit-test", AcquireOptions{Auditor: auditor})
+	if err != nil {
+		t.Fatalf("Acquire() error = %v", err)
+	}
+
+	events := readAuditEvents(t, root)
+	if len(events) != 1 {
+		t.Fatalf("Expected 1 audit event, got %d", len(events))
+	}
+
+	e := events[0]
+	if e.Event != audit.EventAcquire {
+		t.Errorf("Event = %q, want %q", e.Event, audit.EventAcquire)
+	}
+	if e.Name != "audit-test" {
+		t.Errorf("Name = %q, want %q", e.Name, "audit-test")
+	}
+	if e.Owner == "" {
+		t.Error("Owner should not be empty")
+	}
+	if e.PID == 0 {
+		t.Error("PID should not be 0")
+	}
+}
+
+func TestAcquireDeniedEmitsAuditEvent(t *testing.T) {
+	root := t.TempDir()
+	auditor := audit.NewWriter(root)
+
+	// First acquire succeeds
+	err := Acquire(root, "deny-test", AcquireOptions{})
+	if err != nil {
+		t.Fatalf("First Acquire() error = %v", err)
+	}
+
+	// Second acquire fails and should emit deny event
+	err = Acquire(root, "deny-test", AcquireOptions{Auditor: auditor})
+	if err == nil {
+		t.Fatal("Second Acquire() should fail")
+	}
+
+	events := readAuditEvents(t, root)
+	if len(events) != 1 {
+		t.Fatalf("Expected 1 audit event, got %d", len(events))
+	}
+
+	e := events[0]
+	if e.Event != audit.EventDeny {
+		t.Errorf("Event = %q, want %q", e.Event, audit.EventDeny)
+	}
+	if e.Name != "deny-test" {
+		t.Errorf("Name = %q, want %q", e.Name, "deny-test")
+	}
+	// Check holder info in extra
+	if e.Extra == nil {
+		t.Fatal("Extra should contain holder info")
+	}
+	if _, ok := e.Extra["holder_owner"]; !ok {
+		t.Error("Extra should contain holder_owner")
+	}
+	if _, ok := e.Extra["holder_host"]; !ok {
+		t.Error("Extra should contain holder_host")
+	}
+	if _, ok := e.Extra["holder_pid"]; !ok {
+		t.Error("Extra should contain holder_pid")
+	}
+}
+
+func TestAcquireNilAuditorDoesNotPanic(t *testing.T) {
+	root := t.TempDir()
+
+	// Should not panic with nil auditor
+	err := Acquire(root, "nil-auditor-test", AcquireOptions{Auditor: nil})
+	if err != nil {
+		t.Fatalf("Acquire() error = %v", err)
 	}
 }

@@ -97,7 +97,7 @@
 | Ticket | Title                                   | Status  | Notes |
 | ------ | --------------------------------------- | ------- | ----- |
 | L-170  | Audit JSONL schema v1                   | done | `{ts,event,name,owner,host,pid,ttl_sec,extra}`. beads:lokt-ddd |
-| L-171  | Emit audit events (acq/deny/release/...) | backlog | Append-only `audit.log`. |
+| L-171  | Emit audit events (acq/deny/release/...) | done | Append-only `audit.log`. beads:lokt-cy3 |
 | L-172  | `audit --tail`                           | backlog | Tail-follow audit log. |
 | L-173  | `audit --since <ts|dur>`                 | backlog | Basic filtering. |
 

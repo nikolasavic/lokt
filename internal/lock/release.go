@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/nikolasavic/lokt/internal/audit"
 	"github.com/nikolasavic/lokt/internal/identity"
 	"github.com/nikolasavic/lokt/internal/lockfile"
 	"github.com/nikolasavic/lokt/internal/root"
@@ -56,8 +57,9 @@ func (e *NotStaleError) Unwrap() error {
 
 // ReleaseOptions configures lock release.
 type ReleaseOptions struct {
-	Force      bool // Skip ownership check (break-glass)
-	BreakStale bool // Remove only if lock is stale (expired TTL or dead PID)
+	Force      bool          // Skip ownership check (break-glass)
+	BreakStale bool          // Remove only if lock is stale (expired TTL or dead PID)
+	Auditor    *audit.Writer // Optional audit writer for event logging
 }
 
 // Release removes a lock file.
@@ -106,5 +108,32 @@ func Release(rootDir, name string, opts ReleaseOptions) error {
 		return fmt.Errorf("remove lock: %w", err)
 	}
 
+	// Emit release event
+	emitReleaseEvent(opts.Auditor, existing, opts)
+
 	return nil
+}
+
+// emitReleaseEvent emits the appropriate release audit event. Safe to call with nil auditor.
+func emitReleaseEvent(w *audit.Writer, lock *lockfile.Lock, opts ReleaseOptions) {
+	if w == nil {
+		return
+	}
+
+	eventType := audit.EventRelease
+	if opts.Force {
+		eventType = audit.EventForceBreak
+	} else if opts.BreakStale {
+		eventType = audit.EventStaleBreak
+	}
+
+	id := identity.Current()
+	w.Emit(audit.Event{
+		Event:  eventType,
+		Name:   lock.Name,
+		Owner:  id.Owner,
+		Host:   id.Host,
+		PID:    id.PID,
+		TTLSec: lock.TTLSec,
+	})
 }

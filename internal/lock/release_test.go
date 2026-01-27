@@ -1,12 +1,15 @@
 package lock
 
 import (
+	"bufio"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/nikolasavic/lokt/internal/audit"
 	"github.com/nikolasavic/lokt/internal/lockfile"
 )
 
@@ -274,5 +277,155 @@ func TestReleaseBreakStale_CrossHost(t *testing.T) {
 	_, err = os.Stat(path)
 	if os.IsNotExist(err) {
 		t.Error("Lock file should NOT be deleted for cross-host lock")
+	}
+}
+
+// readReleaseAuditEvents reads all events from the audit log file.
+func readReleaseAuditEvents(t *testing.T, rootDir string) []audit.Event {
+	t.Helper()
+	path := filepath.Join(rootDir, "audit.log")
+	f, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		t.Fatalf("Open audit.log: %v", err)
+	}
+	defer f.Close()
+
+	var events []audit.Event
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		var e audit.Event
+		if err := json.Unmarshal(scanner.Bytes(), &e); err != nil {
+			t.Fatalf("Unmarshal audit event: %v", err)
+		}
+		events = append(events, e)
+	}
+	return events
+}
+
+func TestReleaseEmitsAuditEvent(t *testing.T) {
+	root := t.TempDir()
+	auditor := audit.NewWriter(root)
+
+	// Acquire first
+	err := Acquire(root, "release-audit", AcquireOptions{})
+	if err != nil {
+		t.Fatalf("Acquire() error = %v", err)
+	}
+
+	// Release with auditor
+	err = Release(root, "release-audit", ReleaseOptions{Auditor: auditor})
+	if err != nil {
+		t.Fatalf("Release() error = %v", err)
+	}
+
+	events := readReleaseAuditEvents(t, root)
+	if len(events) != 1 {
+		t.Fatalf("Expected 1 audit event, got %d", len(events))
+	}
+
+	e := events[0]
+	if e.Event != audit.EventRelease {
+		t.Errorf("Event = %q, want %q", e.Event, audit.EventRelease)
+	}
+	if e.Name != "release-audit" {
+		t.Errorf("Name = %q, want %q", e.Name, "release-audit")
+	}
+}
+
+func TestReleaseForceEmitsForceBreakEvent(t *testing.T) {
+	root := t.TempDir()
+	auditor := audit.NewWriter(root)
+
+	// Create a lock with different owner
+	locksDir := filepath.Join(root, "locks")
+	if err := os.MkdirAll(locksDir, 0700); err != nil {
+		t.Fatalf("MkdirAll error = %v", err)
+	}
+
+	lock := &lockfile.Lock{
+		Name:       "force-audit",
+		Owner:      "someone-else",
+		Host:       "other-host",
+		PID:        99999,
+		AcquiredAt: time.Now(),
+	}
+	path := filepath.Join(locksDir, "force-audit.json")
+	if err := lockfile.Write(path, lock); err != nil {
+		t.Fatalf("Write lock error = %v", err)
+	}
+
+	// Force release with auditor
+	err := Release(root, "force-audit", ReleaseOptions{Force: true, Auditor: auditor})
+	if err != nil {
+		t.Fatalf("Release(force=true) error = %v", err)
+	}
+
+	events := readReleaseAuditEvents(t, root)
+	if len(events) != 1 {
+		t.Fatalf("Expected 1 audit event, got %d", len(events))
+	}
+
+	e := events[0]
+	if e.Event != audit.EventForceBreak {
+		t.Errorf("Event = %q, want %q", e.Event, audit.EventForceBreak)
+	}
+}
+
+func TestReleaseBreakStaleEmitsStaleBreakEvent(t *testing.T) {
+	root := t.TempDir()
+	auditor := audit.NewWriter(root)
+
+	// Create a lock with expired TTL
+	locksDir := filepath.Join(root, "locks")
+	if err := os.MkdirAll(locksDir, 0700); err != nil {
+		t.Fatalf("MkdirAll error = %v", err)
+	}
+
+	lock := &lockfile.Lock{
+		Name:       "stale-audit",
+		Owner:      "someone-else",
+		Host:       "other-host",
+		PID:        99999,
+		AcquiredAt: time.Now().Add(-2 * time.Hour),
+		TTLSec:     60, // Expired
+	}
+	path := filepath.Join(locksDir, "stale-audit.json")
+	if err := lockfile.Write(path, lock); err != nil {
+		t.Fatalf("Write lock error = %v", err)
+	}
+
+	// BreakStale release with auditor
+	err := Release(root, "stale-audit", ReleaseOptions{BreakStale: true, Auditor: auditor})
+	if err != nil {
+		t.Fatalf("Release(BreakStale=true) error = %v", err)
+	}
+
+	events := readReleaseAuditEvents(t, root)
+	if len(events) != 1 {
+		t.Fatalf("Expected 1 audit event, got %d", len(events))
+	}
+
+	e := events[0]
+	if e.Event != audit.EventStaleBreak {
+		t.Errorf("Event = %q, want %q", e.Event, audit.EventStaleBreak)
+	}
+}
+
+func TestReleaseNilAuditorDoesNotPanic(t *testing.T) {
+	root := t.TempDir()
+
+	// Acquire first
+	err := Acquire(root, "nil-auditor-release", AcquireOptions{})
+	if err != nil {
+		t.Fatalf("Acquire() error = %v", err)
+	}
+
+	// Release with nil auditor should not panic
+	err = Release(root, "nil-auditor-release", ReleaseOptions{Auditor: nil})
+	if err != nil {
+		t.Fatalf("Release() error = %v", err)
 	}
 }
