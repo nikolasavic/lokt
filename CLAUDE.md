@@ -188,6 +188,27 @@ Append-only JSONL at `<root>/audit.log` with events: acquire, deny, release, for
 
 ## Git Workflow
 
+**This is a trunk-based development project.** All work merges directly to `main`.
+
+### Trunk-Based Rules (MUST follow)
+
+1. **Work locally on feature branches** - never push feature branches to origin
+2. **Merge to main locally** - use `git merge --ff-only` to keep linear history
+3. **Push only main** - `git push origin main` after merge
+4. **No long-lived branches** - feature branches exist only during active development
+
+```bash
+# Correct workflow
+git checkout -b feature/L-123 origin/main   # Create local branch
+# ... do work, commit ...
+git checkout main && git pull --ff-only
+git merge --ff-only feature/L-123           # Merge locally
+git push origin main                         # Push main only
+git branch -d feature/L-123                  # Delete local branch
+```
+
+### Other Rules
+
 - **Conventional commits required** - see format below
 - Keep commits atomic and focused
 - Use `/commit` skill for proper formatting
