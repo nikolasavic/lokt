@@ -44,7 +44,7 @@
 
 | Ticket | Title                                   | Status  | Notes |
 | ------ | --------------------------------------- | ------- | ----- |
-| L-130  | Parse duration flags (`--ttl`, etc.)     | backlog | `time.ParseDuration` and validation. |
+| L-130  | Parse duration flags (`--ttl`, etc.)     | in-progress | beads:lokt-b0a |
 | L-131  | Compute expiry + mark expired in status  | backlog | `acquired_ts + ttl_sec`. |
 | L-132  | `unlock --break-stale` (expired only)    | backlog | Refuse if not expired. |
 | L-133  | PID liveness check (unix)                | backlog | `kill(pid,0)` to avoid breaking live locks. |
