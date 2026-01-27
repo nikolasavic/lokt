@@ -111,7 +111,7 @@
 | L-183  | Integration: two processes contend       | backlog | `exec` two `lokt lock` commands. |
 | L-184  | Integration: guard releases on failure   | backlog | Child exits nonzero; lock removed. |
 | L-185  | Lint/format config                       | done | gofmt, govet, golangci-lint configured. |
-| L-186  | CI (linux/mac)                           | backlog | Build + test matrix. |
-| L-187  | Release packaging                         | backlog | goreleaser binaries. |
+| L-186  | CI (linux/mac)                           | in-progress | Build + test matrix. beads:lokt-uyq |
+| L-187  | Release packaging                         | in-progress | goreleaser binaries. beads:lokt-uyq |
 | L-188  | Install script / distribution            | backlog | `curl | sh` or brew. |
 | L-189  | Docs + examples                           | done | README.txt with CLI usage and examples. |
