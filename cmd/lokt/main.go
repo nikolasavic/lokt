@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -70,6 +71,8 @@ func usage() {
 	fmt.Println()
 	fmt.Println("Commands:")
 	fmt.Println("  lock <name>       Acquire a lock")
+	fmt.Println("    --ttl duration  Lock TTL (e.g., 5m, 1h)")
+	fmt.Println("    --wait          Wait for lock to be free")
 	fmt.Println("  unlock <name>     Release a lock")
 	fmt.Println("    --force         Remove without ownership check (break-glass)")
 	fmt.Println("    --break-stale   Remove only if stale (expired TTL or dead PID)")
@@ -91,10 +94,11 @@ func usage() {
 func cmdLock(args []string) int {
 	fs := flag.NewFlagSet("lock", flag.ExitOnError)
 	ttl := fs.Duration("ttl", 0, "Lock TTL (e.g., 5m, 1h)")
+	wait := fs.Bool("wait", false, "Wait for lock to be free")
 	_ = fs.Parse(args)
 
 	if fs.NArg() < 1 {
-		fmt.Fprintln(os.Stderr, "usage: lokt lock [--ttl duration] <name>")
+		fmt.Fprintln(os.Stderr, "usage: lokt lock [--ttl duration] [--wait] <name>")
 		return ExitUsage
 	}
 	name := fs.Arg(0)
@@ -110,15 +114,37 @@ func cmdLock(args []string) int {
 		return ExitError
 	}
 
-	err = lock.Acquire(rootDir, name, lock.AcquireOptions{TTL: *ttl})
-	if err != nil {
-		var held *lock.HeldError
-		if errors.As(err, &held) {
-			fmt.Fprintf(os.Stderr, "error: %v\n", held)
-			return ExitLockHeld
+	opts := lock.AcquireOptions{TTL: *ttl}
+
+	if *wait {
+		ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+		defer cancel()
+
+		err = lock.AcquireWithWait(ctx, rootDir, name, opts)
+		if err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				fmt.Fprintln(os.Stderr, "interrupted")
+				return ExitError
+			}
+			var held *lock.HeldError
+			if errors.As(err, &held) {
+				fmt.Fprintf(os.Stderr, "error: %v\n", held)
+				return ExitLockHeld
+			}
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			return ExitError
 		}
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		return ExitError
+	} else {
+		err = lock.Acquire(rootDir, name, opts)
+		if err != nil {
+			var held *lock.HeldError
+			if errors.As(err, &held) {
+				fmt.Fprintf(os.Stderr, "error: %v\n", held)
+				return ExitLockHeld
+			}
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			return ExitError
+		}
 	}
 
 	fmt.Printf("acquired lock %q\n", name)
