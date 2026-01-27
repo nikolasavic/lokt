@@ -1,0 +1,71 @@
+#!/bin/bash
+#
+# Pre-push hook for lokt
+#
+# Ensures all quality checks pass before pushing:
+# 1. Tests pass
+# 2. Linting passes (REQUIRED)
+#
+
+set -e
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+echo_error() { echo -e "${RED}ERROR:${NC} $1" >&2; }
+echo_ok() { echo -e "${GREEN}OK:${NC} $1"; }
+
+# Get repo root
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+cd "$REPO_ROOT"
+
+# =============================================================================
+# 1. Run Tests
+# =============================================================================
+
+echo "Running tests..."
+if ! go test ./... >/dev/null 2>&1; then
+    echo_error "Tests failed"
+    echo "Run 'go test ./...' to see details"
+    exit 1
+fi
+echo_ok "Tests pass"
+
+# =============================================================================
+# 2. Run Linting (REQUIRED)
+# =============================================================================
+
+echo "Running linter..."
+
+# Check if golangci-lint is available
+if ! command -v golangci-lint >/dev/null 2>&1; then
+    # Try to find it in GOPATH
+    GOPATH_BIN="$(go env GOPATH)/bin/golangci-lint"
+    if [[ -x "$GOPATH_BIN" ]]; then
+        export PATH="$PATH:$(go env GOPATH)/bin"
+    else
+        echo_error "golangci-lint not found"
+        echo ""
+        echo "Install with:"
+        echo "  go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest"
+        echo ""
+        echo "Or skip this check with: git push --no-verify"
+        exit 1
+    fi
+fi
+
+if ! golangci-lint run --timeout=5m ./...; then
+    echo_error "Linting failed"
+    echo ""
+    echo "Fix the issues above, then try again."
+    echo "Or skip this check with: git push --no-verify"
+    exit 1
+fi
+echo_ok "Linting passes"
+
+echo ""
+echo_ok "All pre-push checks passed!"
+exit 0

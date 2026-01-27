@@ -89,7 +89,7 @@ func usage() {
 func cmdLock(args []string) int {
 	fs := flag.NewFlagSet("lock", flag.ExitOnError)
 	ttl := fs.Duration("ttl", 0, "Lock TTL (e.g., 5m, 1h)")
-	fs.Parse(args)
+	_ = fs.Parse(args)
 
 	if fs.NArg() < 1 {
 		fmt.Fprintln(os.Stderr, "usage: lokt lock [--ttl duration] <name>")
@@ -127,7 +127,7 @@ func cmdUnlock(args []string) int {
 	fs := flag.NewFlagSet("unlock", flag.ExitOnError)
 	force := fs.Bool("force", false, "Remove lock without ownership check (break-glass)")
 	breakStale := fs.Bool("break-stale", false, "Remove lock only if stale (expired TTL or dead PID)")
-	fs.Parse(args)
+	_ = fs.Parse(args)
 
 	if fs.NArg() < 1 {
 		fmt.Fprintln(os.Stderr, "usage: lokt unlock [--force | --break-stale] <name>")
@@ -171,7 +171,7 @@ func cmdUnlock(args []string) int {
 func cmdStatus(args []string) int {
 	fs := flag.NewFlagSet("status", flag.ExitOnError)
 	pruneExpired := fs.Bool("prune-expired", false, "Remove expired locks while listing")
-	fs.Parse(args)
+	_ = fs.Parse(args)
 
 	rootDir, err := root.Find()
 	if err != nil {
@@ -284,7 +284,7 @@ func cmdGuard(args []string) int {
 	released := false
 	releaseLock := func() {
 		if !released {
-			lock.Release(rootDir, name, lock.ReleaseOptions{})
+			_ = lock.Release(rootDir, name, lock.ReleaseOptions{})
 			released = true
 		}
 	}
@@ -313,7 +313,7 @@ func cmdGuard(args []string) int {
 	select {
 	case sig := <-sigCh:
 		// Forward signal to child
-		child.Process.Signal(sig)
+		_ = child.Process.Signal(sig)
 		<-done // wait for child to exit
 		releaseLock()
 		// Exit with 128 + signal number (standard Unix convention)

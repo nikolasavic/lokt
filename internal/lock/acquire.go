@@ -75,12 +75,11 @@ func Acquire(rootDir, name string, opts AcquireOptions) error {
 		}
 		return fmt.Errorf("create lock file: %w", err)
 	}
-	f.Close()
+	_ = f.Close()
 
 	// Write lock data atomically (replaces the empty file)
 	if err := lockfile.Write(path, lock); err != nil {
-		// Clean up on failure
-		os.Remove(path)
+		_ = os.Remove(path) // Clean up on failure
 		return fmt.Errorf("write lock file: %w", err)
 	}
 

@@ -11,10 +11,10 @@ import (
 type Reason string
 
 const (
-	ReasonExpired   Reason = "expired"    // TTL has elapsed
-	ReasonDeadPID   Reason = "dead_pid"   // Process no longer running
-	ReasonNotStale  Reason = ""           // Lock is not stale
-	ReasonUnknown   Reason = "unknown"    // Cannot determine (cross-host)
+	ReasonExpired  Reason = "expired"  // TTL has elapsed
+	ReasonDeadPID  Reason = "dead_pid" // Process no longer running
+	ReasonNotStale Reason = ""         // Lock is not stale
+	ReasonUnknown  Reason = "unknown"  // Cannot determine (cross-host)
 )
 
 // Result contains the staleness check result.

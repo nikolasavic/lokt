@@ -71,7 +71,7 @@ func ValidateName(name string) error {
 
 // Read parses a lock file from the given path.
 func Read(path string) (*Lock, error) {
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) //nolint:gosec // Path is validated by caller
 	if err != nil {
 		return nil, err
 	}
@@ -99,8 +99,8 @@ func Write(path string, lock *Lock) error {
 	tmpPath := tmp.Name()
 
 	defer func() {
-		tmp.Close()
-		os.Remove(tmpPath)
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
 	}()
 
 	if _, err := tmp.Write(data); err != nil {

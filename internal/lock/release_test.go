@@ -47,7 +47,9 @@ func TestReleaseNotOwner(t *testing.T) {
 
 	// Create a lock with different owner
 	locksDir := filepath.Join(root, "locks")
-	os.MkdirAll(locksDir, 0700)
+	if err := os.MkdirAll(locksDir, 0700); err != nil {
+		t.Fatalf("MkdirAll error = %v", err)
+	}
 
 	lock := &lockfile.Lock{
 		Name:       "other-owner",
@@ -82,7 +84,9 @@ func TestReleaseForce(t *testing.T) {
 
 	// Create a lock with different owner
 	locksDir := filepath.Join(root, "locks")
-	os.MkdirAll(locksDir, 0700)
+	if err := os.MkdirAll(locksDir, 0700); err != nil {
+		t.Fatalf("MkdirAll error = %v", err)
+	}
 
 	lock := &lockfile.Lock{
 		Name:       "force-test",
@@ -114,7 +118,9 @@ func TestReleaseBreakStale_ExpiredTTL(t *testing.T) {
 
 	// Create a lock with expired TTL
 	locksDir := filepath.Join(root, "locks")
-	os.MkdirAll(locksDir, 0700)
+	if err := os.MkdirAll(locksDir, 0700); err != nil {
+		t.Fatalf("MkdirAll error = %v", err)
+	}
 
 	lock := &lockfile.Lock{
 		Name:       "stale-ttl",
@@ -152,7 +158,9 @@ func TestReleaseBreakStale_DeadPID(t *testing.T) {
 
 	// Create a lock with dead PID on same host
 	locksDir := filepath.Join(root, "locks")
-	os.MkdirAll(locksDir, 0700)
+	if err := os.MkdirAll(locksDir, 0700); err != nil {
+		t.Fatalf("MkdirAll error = %v", err)
+	}
 
 	lock := &lockfile.Lock{
 		Name:       "stale-pid",
@@ -190,7 +198,9 @@ func TestReleaseBreakStale_NotStale(t *testing.T) {
 
 	// Create a lock with alive PID on same host
 	locksDir := filepath.Join(root, "locks")
-	os.MkdirAll(locksDir, 0700)
+	if err := os.MkdirAll(locksDir, 0700); err != nil {
+		t.Fatalf("MkdirAll error = %v", err)
+	}
 
 	lock := &lockfile.Lock{
 		Name:       "not-stale",
@@ -232,7 +242,9 @@ func TestReleaseBreakStale_CrossHost(t *testing.T) {
 
 	// Create a lock on different host (cannot verify PID)
 	locksDir := filepath.Join(root, "locks")
-	os.MkdirAll(locksDir, 0700)
+	if err := os.MkdirAll(locksDir, 0700); err != nil {
+		t.Fatalf("MkdirAll error = %v", err)
+	}
 
 	lock := &lockfile.Lock{
 		Name:       "cross-host",

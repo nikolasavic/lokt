@@ -14,7 +14,7 @@ REPO_ROOT="$(git rev-parse --show-toplevel)"
 HOOKS_SRC="$REPO_ROOT/util/hooks"
 HOOKS_DST="$REPO_ROOT/.git/hooks"
 
-HOOKS=(pre-commit commit-msg post-merge)
+HOOKS=(pre-commit commit-msg post-merge pre-push)
 
 status() {
     echo "Hook status:"

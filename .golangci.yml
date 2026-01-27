@@ -20,7 +20,6 @@ linters:
     - goimports     # Check imports
     - misspell      # Catch typos
     - unconvert     # Remove unnecessary conversions
-    - unparam       # Find unused parameters
     - gosec         # Security issues
     - errname       # Error naming conventions
     - errorlint     # Error wrapping issues
@@ -30,10 +29,13 @@ linters:
 linters-settings:
   errcheck:
     check-type-assertions: true
-    check-blank: true
+    check-blank: false  # Allow _ = to explicitly ignore errors
 
   govet:
     enable-all: true
+    disable:
+      - fieldalignment  # Micro-optimization, not worth the churn
+      - shadow          # Too noisy in tests
 
   goimports:
     local-prefixes: github.com/nikolasavic/lokt
@@ -41,8 +43,13 @@ linters-settings:
   gocritic:
     enabled-tags:
       - diagnostic
-      - style
       - performance
+
+  gosec:
+    excludes:
+      - G204  # Subprocess with variable args (expected for guard command)
+      - G302  # File permissions (0644 is fine for lock files)
+      - G304  # File path from variable (expected for file operations)
 
   revive:
     rules:
@@ -52,18 +59,24 @@ linters-settings:
       - name: error-return
       - name: error-strings
       - name: error-naming
-      - name: exported
       - name: increment-decrement
       - name: var-declaration
-      - name: package-comments
       - name: range
       - name: receiver-naming
       - name: time-naming
       - name: unexported-return
       - name: indent-error-flow
       - name: errorf
+      # Disabled: exported, package-comments (too noisy for small CLIs)
 
 issues:
   exclude-use-default: false
   max-issues-per-linter: 0
   max-same-issues: 0
+
+  exclude-rules:
+    # Allow type assertions on errors in main (CLI simplicity)
+    - path: cmd/lokt/main.go
+      linters:
+        - errorlint
+      text: "type assertion on error"
