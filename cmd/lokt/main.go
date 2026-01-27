@@ -80,8 +80,11 @@ func usage() {
 	fmt.Println("  status [name]     Show lock status")
 	fmt.Println("    --json          Output in JSON format")
 	fmt.Println("    --prune-expired Remove expired locks while listing")
-	fmt.Println("  guard [--ttl duration] <name> -- <cmd...>")
+	fmt.Println("  guard <name> -- <cmd...>")
 	fmt.Println("                    Run command while holding lock")
+	fmt.Println("    --ttl duration      Lock TTL (e.g., 5m, 1h)")
+	fmt.Println("    --wait              Wait for lock to be free")
+	fmt.Println("    --timeout duration  Maximum wait time (requires --wait)")
 	fmt.Println("  version           Show version info")
 	fmt.Println()
 	fmt.Println("Exit codes:")
@@ -322,19 +325,21 @@ func cmdGuard(args []string) int {
 		}
 	}
 	if dashIdx == -1 || dashIdx == 0 || dashIdx == len(args)-1 {
-		fmt.Fprintln(os.Stderr, "usage: lokt guard [--ttl duration] <name> -- <command...>")
+		fmt.Fprintln(os.Stderr, "usage: lokt guard [flags] <name> -- <command...>")
 		return ExitUsage
 	}
 
 	// Parse flags (before --)
 	fs := flag.NewFlagSet("guard", flag.ContinueOnError)
 	ttl := fs.Duration("ttl", 0, "Lock TTL (e.g., 5m, 1h)")
+	wait := fs.Bool("wait", false, "Wait for lock to be free")
+	timeout := fs.Duration("timeout", 0, "Maximum time to wait (requires --wait)")
 	if err := fs.Parse(args[:dashIdx]); err != nil {
-		fmt.Fprintln(os.Stderr, "usage: lokt guard [--ttl duration] <name> -- <command...>")
+		fmt.Fprintln(os.Stderr, "usage: lokt guard [flags] <name> -- <command...>")
 		return ExitUsage
 	}
 	if fs.NArg() != 1 {
-		fmt.Fprintln(os.Stderr, "usage: lokt guard [--ttl duration] <name> -- <command...>")
+		fmt.Fprintln(os.Stderr, "usage: lokt guard [flags] <name> -- <command...>")
 		return ExitUsage
 	}
 	name := fs.Arg(0)
@@ -345,6 +350,16 @@ func cmdGuard(args []string) int {
 		return ExitUsage
 	}
 
+	if *timeout > 0 && !*wait {
+		fmt.Fprintln(os.Stderr, "error: --timeout requires --wait")
+		return ExitUsage
+	}
+
+	if *timeout < 0 {
+		fmt.Fprintln(os.Stderr, "error: --timeout must be positive (e.g., 5s, 1m)")
+		return ExitUsage
+	}
+
 	// Resolve root
 	rootDir, err := root.Find()
 	if err != nil {
@@ -352,15 +367,53 @@ func cmdGuard(args []string) int {
 		return ExitError
 	}
 
-	// Acquire lock
-	if err := lock.Acquire(rootDir, name, lock.AcquireOptions{TTL: *ttl}); err != nil {
-		var held *lock.HeldError
-		if errors.As(err, &held) {
-			fmt.Fprintf(os.Stderr, "error: %v\n", held)
-			return ExitLockHeld
+	opts := lock.AcquireOptions{TTL: *ttl}
+
+	// Acquire lock (with optional wait)
+	if *wait {
+		ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+		defer cancel()
+
+		if *timeout > 0 {
+			ctx, cancel = context.WithTimeout(ctx, *timeout)
+			defer cancel()
 		}
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		return ExitError
+
+		err = lock.AcquireWithWait(ctx, rootDir, name, opts)
+		if err != nil {
+			if errors.Is(err, context.Canceled) {
+				fmt.Fprintln(os.Stderr, "interrupted")
+				return ExitError
+			}
+			if errors.Is(err, context.DeadlineExceeded) {
+				path := root.LockFilePath(rootDir, name)
+				if lf, readErr := readLockFile(path); readErr == nil {
+					age := time.Since(lf.AcquiredAt).Truncate(time.Second)
+					fmt.Fprintf(os.Stderr, "error: timeout waiting for lock %q held by %s@%s (pid %d) for %s\n",
+						name, lf.Owner, lf.Host, lf.PID, age)
+				} else {
+					fmt.Fprintf(os.Stderr, "error: timeout waiting for lock %q\n", name)
+				}
+				return ExitLockHeld
+			}
+			var held *lock.HeldError
+			if errors.As(err, &held) {
+				fmt.Fprintf(os.Stderr, "error: %v\n", held)
+				return ExitLockHeld
+			}
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			return ExitError
+		}
+	} else {
+		if err := lock.Acquire(rootDir, name, opts); err != nil {
+			var held *lock.HeldError
+			if errors.As(err, &held) {
+				fmt.Fprintf(os.Stderr, "error: %v\n", held)
+				return ExitLockHeld
+			}
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			return ExitError
+		}
 	}
 
 	// Ensure release on all paths

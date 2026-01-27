@@ -33,9 +33,9 @@ do_build() {
 
 # Use lokt guard if available (eat our own dog food)
 if command -v lokt &>/dev/null; then
-    exec lokt guard build -- bash -c "$(declare -f do_build); do_build $1"
+    exec lokt guard --wait build -- bash -c "$(declare -f do_build); do_build $1"
 elif [[ -x "./lokt" ]]; then
-    exec ./lokt guard build -- bash -c "$(declare -f do_build); do_build $1"
+    exec ./lokt guard --wait build -- bash -c "$(declare -f do_build); do_build $1"
 else
     # First build - no lokt available yet
     echo "(first build - no lock available)"
