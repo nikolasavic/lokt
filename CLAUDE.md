@@ -188,23 +188,24 @@ Append-only JSONL at `<root>/audit.log` with events: acquire, deny, release, for
 
 ## Git Workflow
 
-**This is a trunk-based development project.** All work merges directly to `main`.
+**This is a trunk-based development project.** Commit directly to `main`. No feature branches.
 
 ### Trunk-Based Rules (MUST follow)
 
-1. **Work locally on feature branches** - never push feature branches to origin
-2. **Merge to main locally** - use `git merge --ff-only` to keep linear history
-3. **Push only main** - `git push origin main` after merge
-4. **No long-lived branches** - feature branches exist only during active development
+1. **Commit directly to main** - no feature branches, no PRs
+2. **Push to main** - `git push origin main` after commits
+3. **For parallel agents** - use git worktrees, not branches
 
 ```bash
-# Correct workflow
-git checkout -b feature/L-123 origin/main   # Create local branch
+# Single agent workflow
+git pull --ff-only origin main
 # ... do work, commit ...
-git checkout main && git pull --ff-only
-git merge --ff-only feature/L-123           # Merge locally
-git push origin main                         # Push main only
-git branch -d feature/L-123                  # Delete local branch
+git push origin main
+
+# Multiple agents (use worktrees for isolation)
+git worktree add ../lokt-agent-2 main
+cd ../lokt-agent-2
+# ... work in separate directory, same main branch ...
 ```
 
 ### Other Rules
