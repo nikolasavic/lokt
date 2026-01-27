@@ -6,6 +6,9 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/nikolasavic/lokt/internal/lock"
@@ -47,6 +50,8 @@ func main() {
 		code = cmdUnlock(args)
 	case "status":
 		code = cmdStatus(args)
+	case "guard":
+		code = cmdGuard(args)
 	case "help", "-h", "--help":
 		usage()
 	default:
@@ -66,6 +71,7 @@ func usage() {
 	fmt.Println("  lock <name>       Acquire a lock")
 	fmt.Println("  unlock <name>     Release a lock")
 	fmt.Println("  status [name]     Show lock status")
+	fmt.Println("  guard <name> -- <cmd...>  Run command while holding lock")
 	fmt.Println("  version           Show version info")
 	fmt.Println()
 	fmt.Println("Exit codes:")
@@ -186,6 +192,105 @@ func cmdStatus(args []string) int {
 		}
 	}
 	return ExitOK
+}
+
+func cmdGuard(args []string) int {
+	// Find "--" separator
+	dashIdx := -1
+	for i, arg := range args {
+		if arg == "--" {
+			dashIdx = i
+			break
+		}
+	}
+	if dashIdx == -1 || dashIdx == 0 || dashIdx == len(args)-1 {
+		fmt.Fprintln(os.Stderr, "usage: lokt guard [--ttl duration] <name> -- <command...>")
+		return ExitUsage
+	}
+
+	// Parse flags (before --)
+	fs := flag.NewFlagSet("guard", flag.ContinueOnError)
+	ttl := fs.Duration("ttl", 0, "Lock TTL (e.g., 5m, 1h)")
+	if err := fs.Parse(args[:dashIdx]); err != nil {
+		fmt.Fprintln(os.Stderr, "usage: lokt guard [--ttl duration] <name> -- <command...>")
+		return ExitUsage
+	}
+	if fs.NArg() != 1 {
+		fmt.Fprintln(os.Stderr, "usage: lokt guard [--ttl duration] <name> -- <command...>")
+		return ExitUsage
+	}
+	name := fs.Arg(0)
+	cmdArgs := args[dashIdx+1:]
+
+	// Resolve root
+	rootDir, err := root.Find()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return ExitError
+	}
+
+	// Acquire lock
+	if err := lock.Acquire(rootDir, name, lock.AcquireOptions{TTL: *ttl}); err != nil {
+		var held *lock.HeldError
+		if errors.As(err, &held) {
+			fmt.Fprintf(os.Stderr, "error: %v\n", held)
+			return ExitLockHeld
+		}
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return ExitError
+	}
+
+	// Ensure release on all paths
+	released := false
+	releaseLock := func() {
+		if !released {
+			lock.Release(rootDir, name, lock.ReleaseOptions{})
+			released = true
+		}
+	}
+	defer releaseLock()
+
+	// Set up signal handling
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(sigCh)
+
+	// Run child command
+	child := exec.Command(cmdArgs[0], cmdArgs[1:]...)
+	child.Stdin = os.Stdin
+	child.Stdout = os.Stdout
+	child.Stderr = os.Stderr
+
+	if err := child.Start(); err != nil {
+		fmt.Fprintf(os.Stderr, "error: failed to start command: %v\n", err)
+		return ExitError
+	}
+
+	// Wait for child or signal
+	done := make(chan error, 1)
+	go func() { done <- child.Wait() }()
+
+	select {
+	case sig := <-sigCh:
+		// Forward signal to child
+		child.Process.Signal(sig)
+		<-done // wait for child to exit
+		releaseLock()
+		// Exit with 128 + signal number (standard Unix convention)
+		if s, ok := sig.(syscall.Signal); ok {
+			return 128 + int(s)
+		}
+		return ExitError
+	case err := <-done:
+		if err == nil {
+			return ExitOK
+		}
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			return exitErr.ExitCode()
+		}
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return ExitError
+	}
 }
 
 func showLock(rootDir, name string) int {
