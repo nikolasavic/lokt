@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/nikolasavic/lokt/internal/audit"
+	"github.com/nikolasavic/lokt/internal/doctor"
 	"github.com/nikolasavic/lokt/internal/lock"
 	"github.com/nikolasavic/lokt/internal/root"
 	"github.com/nikolasavic/lokt/internal/stale"
@@ -59,6 +60,8 @@ func main() {
 		code = cmdGuard(args)
 	case "audit":
 		code = cmdAudit(args)
+	case "doctor":
+		code = cmdDoctor(args)
 	case "help", "-h", "--help":
 		usage()
 	default:
@@ -93,6 +96,8 @@ func usage() {
 	fmt.Println("  audit             Query audit log")
 	fmt.Println("    --since duration|ts Show events since (e.g., 1h, 2026-01-27T10:00:00Z)")
 	fmt.Println("    --name lock         Filter by lock name")
+	fmt.Println("  doctor            Validate lokt setup")
+	fmt.Println("    --json          Output in JSON format")
 	fmt.Println("  version           Show version info")
 	fmt.Println()
 	fmt.Println("Exit codes:")
@@ -955,5 +960,122 @@ func tailAuditLog(ctx context.Context, path string, nameFilter string) int {
 			return ExitOK
 		case <-time.After(pollInterval):
 		}
+	}
+}
+
+// doctorOutput is the JSON structure for doctor command output.
+type doctorOutput struct {
+	RootMethod string               `json:"root_method"`
+	RootPath   string               `json:"root_path"`
+	Checks     []doctor.CheckResult `json:"checks"`
+	Overall    doctor.Status        `json:"overall"`
+}
+
+func cmdDoctor(args []string) int {
+	fs := flag.NewFlagSet("doctor", flag.ExitOnError)
+	jsonOutput := fs.Bool("json", false, "Output in JSON format")
+	_ = fs.Parse(args)
+
+	// Discover root with method
+	rootPath, method, err := root.FindWithMethod()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return ExitError
+	}
+
+	// Run all health checks
+	results := []doctor.CheckResult{
+		doctor.CheckWritable(rootPath),
+		doctor.CheckNetworkFS(rootPath),
+		doctor.CheckClock(),
+	}
+
+	overall := doctor.Overall(results)
+
+	if *jsonOutput {
+		output := doctorOutput{
+			RootMethod: method.String(),
+			RootPath:   rootPath,
+			Checks:     results,
+			Overall:    overall,
+		}
+		data, _ := json.MarshalIndent(output, "", "  ")
+		fmt.Println(string(data))
+	} else {
+		// Text output
+		fmt.Println("lokt doctor")
+		fmt.Println()
+		fmt.Printf("Root:        %s (via %s)\n", filepath.Base(rootPath), methodDescription(method))
+		fmt.Printf("Path:        %s\n", rootPath)
+		fmt.Println()
+		fmt.Println("Checks:")
+		for _, r := range results {
+			printCheckResult(r)
+		}
+		fmt.Println()
+		fmt.Printf("Result: %s\n", overallDescription(overall))
+	}
+
+	// Exit code: 1 if any check failed, 0 otherwise (warnings don't fail)
+	if overall == doctor.StatusFail {
+		return ExitError
+	}
+	return ExitOK
+}
+
+// methodDescription returns a human-readable description of the discovery method.
+func methodDescription(m root.DiscoveryMethod) string {
+	switch m {
+	case root.MethodEnvVar:
+		return "LOKT_ROOT env"
+	case root.MethodGit:
+		return "git common dir"
+	case root.MethodLocalDir:
+		return ".lokt/ fallback"
+	default:
+		return "unknown"
+	}
+}
+
+// printCheckResult prints a single check result in text format.
+func printCheckResult(r doctor.CheckResult) {
+	var marker string
+	switch r.Status {
+	case doctor.StatusOK:
+		marker = "[OK]"
+	case doctor.StatusWarn:
+		marker = "[WARN]"
+	case doctor.StatusFail:
+		marker = "[FAIL]"
+	}
+
+	// Map check names to display names
+	displayNames := map[string]string{
+		"writable":   "Directory writable",
+		"network_fs": "Network filesystem",
+		"clock":      "Clock sanity",
+	}
+	displayName := displayNames[r.Name]
+	if displayName == "" {
+		displayName = r.Name
+	}
+
+	fmt.Printf("  %-6s %s\n", marker, displayName)
+	if r.Message != "" {
+		fmt.Printf("         %s\n", r.Message)
+	}
+}
+
+// overallDescription returns a human-readable overall result.
+func overallDescription(s doctor.Status) string {
+	switch s {
+	case doctor.StatusOK:
+		return "PASS"
+	case doctor.StatusWarn:
+		return "PASS with warnings"
+	case doctor.StatusFail:
+		return "FAIL"
+	default:
+		return "UNKNOWN"
 	}
 }

@@ -702,7 +702,8 @@ func TestAcquire_AutoPruneEmitsAuditEvent(t *testing.T) {
 	if pruneEvent.Extra["pruned_host"] != hostname {
 		t.Errorf("pruned_host = %v, want %q", pruneEvent.Extra["pruned_host"], hostname)
 	}
-	if int(pruneEvent.Extra["pruned_pid"].(float64)) != 999999 {
+	prunedPID, ok := pruneEvent.Extra["pruned_pid"].(float64)
+	if !ok || int(prunedPID) != 999999 {
 		t.Errorf("pruned_pid = %v, want 999999", pruneEvent.Extra["pruned_pid"])
 	}
 

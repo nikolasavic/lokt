@@ -14,27 +14,60 @@ const (
 	LocksDir    = "locks"
 )
 
+// DiscoveryMethod indicates how the Lokt root was discovered.
+type DiscoveryMethod int
+
+const (
+	// MethodEnvVar indicates root was set via LOKT_ROOT environment variable.
+	MethodEnvVar DiscoveryMethod = iota
+	// MethodGit indicates root was discovered via git common dir (.git/lokt/).
+	MethodGit
+	// MethodLocalDir indicates root was set to .lokt/ in current directory.
+	MethodLocalDir
+)
+
+// String returns a human-readable name for the discovery method.
+func (m DiscoveryMethod) String() string {
+	switch m {
+	case MethodEnvVar:
+		return "env"
+	case MethodGit:
+		return "git"
+	case MethodLocalDir:
+		return "local"
+	default:
+		return "unknown"
+	}
+}
+
 // Find locates the Lokt root directory using the following precedence:
 // 1. LOKT_ROOT environment variable
 // 2. Git common dir (for worktree support): .git/lokt/
 // 3. .lokt/ in current working directory
 func Find() (string, error) {
+	path, _, err := FindWithMethod()
+	return path, err
+}
+
+// FindWithMethod locates the Lokt root directory and reports which method was used.
+// Returns the path, discovery method, and any error.
+func FindWithMethod() (string, DiscoveryMethod, error) {
 	// 1. Check environment variable
 	if envRoot := os.Getenv(EnvLoktRoot); envRoot != "" {
-		return envRoot, nil
+		return envRoot, MethodEnvVar, nil
 	}
 
 	// 2. Try git common dir
 	if gitRoot, err := findGitRoot(); err == nil {
-		return filepath.Join(gitRoot, "lokt"), nil
+		return filepath.Join(gitRoot, "lokt"), MethodGit, nil
 	}
 
 	// 3. Fall back to .lokt/ in cwd
 	cwd, err := os.Getwd()
 	if err != nil {
-		return "", err
+		return "", MethodLocalDir, err
 	}
-	return filepath.Join(cwd, DirName), nil
+	return filepath.Join(cwd, DirName), MethodLocalDir, nil
 }
 
 // findGitRoot returns the git common directory (handles worktrees).
