@@ -58,6 +58,10 @@ func main() {
 		code = cmdStatus(args)
 	case "guard":
 		code = cmdGuard(args)
+	case "freeze":
+		code = cmdFreeze(args)
+	case "unfreeze":
+		code = cmdUnfreeze(args)
 	case "audit":
 		code = cmdAudit(args)
 	case "doctor":
@@ -93,6 +97,10 @@ func usage() {
 	fmt.Println("    --ttl duration      Lock TTL (e.g., 5m, 1h)")
 	fmt.Println("    --wait              Wait for lock to be free")
 	fmt.Println("    --timeout duration  Maximum wait time (requires --wait)")
+	fmt.Println("  freeze <name>     Temporarily block guard commands")
+	fmt.Println("    --ttl duration      Freeze duration (required, e.g., 15m, 1h)")
+	fmt.Println("  unfreeze <name>   Remove a freeze early")
+	fmt.Println("    --force         Remove without ownership check (break-glass)")
 	fmt.Println("  audit             Query audit log")
 	fmt.Println("    --since duration|ts Show events since (e.g., 1h, 2026-01-27T10:00:00Z)")
 	fmt.Println("    --name lock         Filter by lock name")
@@ -384,6 +392,18 @@ func cmdGuard(args []string) int {
 	}
 
 	auditor := audit.NewWriter(rootDir)
+
+	// Check for active freeze before acquiring
+	if err := lock.CheckFreeze(rootDir, name, auditor); err != nil {
+		var frozen *lock.FrozenError
+		if errors.As(err, &frozen) {
+			fmt.Fprintf(os.Stderr, "error: %v\n", frozen)
+			return ExitLockHeld
+		}
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return ExitError
+	}
+
 	opts := lock.AcquireOptions{TTL: *ttl, Auditor: auditor}
 
 	// Acquire lock (with optional wait)
@@ -563,19 +583,22 @@ func showLock(rootDir, name string, jsonOutput bool) int {
 
 func showLockBrief(rootDir, name string) {
 	path := root.LockFilePath(rootDir, name)
-	lock, err := readLockFile(path)
+	lf, err := readLockFile(path)
 	if err != nil {
 		return
 	}
 
-	age := time.Since(lock.AcquiredAt).Truncate(time.Second)
+	age := time.Since(lf.AcquiredAt).Truncate(time.Second)
 	status := ""
-	if lock.IsExpired() {
-		status = " [EXPIRED]"
-	} else if liveness := pidLiveness(lock); liveness == "dead" {
-		status = " [DEAD]"
+	if lock.IsFreezeLock(name) {
+		status = " [FROZEN]"
 	}
-	fmt.Printf("%-20s  %s@%s  %s%s\n", name, lock.Owner, lock.Host, age, status)
+	if lf.IsExpired() {
+		status += " [EXPIRED]"
+	} else if liveness := pidLiveness(lf); liveness == "dead" {
+		status += " [DEAD]"
+	}
+	fmt.Printf("%-20s  %s@%s  %s%s\n", name, lf.Owner, lf.Host, age, status)
 }
 
 // showLockWithPrune shows a lock and removes it if expired.
@@ -659,10 +682,11 @@ type statusOutput struct {
 	AgeSec     int    `json:"age_sec"`
 	Expired    bool   `json:"expired"`
 	PIDStatus  string `json:"pid_status"`
+	Freeze     bool   `json:"freeze,omitempty"`
 }
 
 func lockToStatusOutput(lf *lockFile) statusOutput {
-	return statusOutput{
+	out := statusOutput{
 		Name:       lf.Name,
 		Owner:      lf.Owner,
 		Host:       lf.Host,
@@ -673,6 +697,10 @@ func lockToStatusOutput(lf *lockFile) statusOutput {
 		Expired:    lf.IsExpired(),
 		PIDStatus:  pidLiveness(lf),
 	}
+	if lock.IsFreezeLock(lf.Name) {
+		out.Freeze = true
+	}
+	return out
 }
 
 func (l *lockFile) IsExpired() bool {
@@ -696,6 +724,81 @@ func pidLiveness(lock *lockFile) string {
 		return "alive"
 	}
 	return "dead"
+}
+
+func cmdFreeze(args []string) int {
+	fs := flag.NewFlagSet("freeze", flag.ExitOnError)
+	ttl := fs.Duration("ttl", 0, "Freeze duration (required, e.g., 15m, 1h)")
+	_ = fs.Parse(args)
+
+	if fs.NArg() < 1 {
+		fmt.Fprintln(os.Stderr, "usage: lokt freeze --ttl <duration> <name>")
+		return ExitUsage
+	}
+	name := fs.Arg(0)
+
+	if *ttl <= 0 {
+		fmt.Fprintln(os.Stderr, "error: --ttl is required for freeze (e.g., --ttl 15m)")
+		return ExitUsage
+	}
+
+	rootDir, err := root.Find()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return ExitError
+	}
+
+	auditor := audit.NewWriter(rootDir)
+	err = lock.Freeze(rootDir, name, lock.FreezeOptions{TTL: *ttl, Auditor: auditor})
+	if err != nil {
+		var held *lock.HeldError
+		if errors.As(err, &held) {
+			fmt.Fprintf(os.Stderr, "error: %v\n", held)
+			return ExitLockHeld
+		}
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return ExitError
+	}
+
+	fmt.Printf("frozen %q for %s\n", name, *ttl)
+	return ExitOK
+}
+
+func cmdUnfreeze(args []string) int {
+	fs := flag.NewFlagSet("unfreeze", flag.ExitOnError)
+	force := fs.Bool("force", false, "Remove freeze without ownership check (break-glass)")
+	_ = fs.Parse(args)
+
+	if fs.NArg() < 1 {
+		fmt.Fprintln(os.Stderr, "usage: lokt unfreeze [--force] <name>")
+		return ExitUsage
+	}
+	name := fs.Arg(0)
+
+	rootDir, err := root.Find()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return ExitError
+	}
+
+	auditor := audit.NewWriter(rootDir)
+	err = lock.Unfreeze(rootDir, name, lock.UnfreezeOptions{Force: *force, Auditor: auditor})
+	if err != nil {
+		if errors.Is(err, lock.ErrNotFound) {
+			fmt.Fprintf(os.Stderr, "error: freeze %q not found\n", name)
+			return ExitNotFound
+		}
+		var notOwner *lock.NotOwnerError
+		if errors.As(err, &notOwner) {
+			fmt.Fprintf(os.Stderr, "error: %v\n", notOwner)
+			return ExitNotOwner
+		}
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return ExitError
+	}
+
+	fmt.Printf("unfrozen %q\n", name)
+	return ExitOK
 }
 
 func cmdAudit(args []string) int {

@@ -98,11 +98,11 @@
 
 | Ticket | Title                                   | Status  | Notes |
 | ------ | --------------------------------------- | ------- | ----- |
-| L-160  | `freeze <name> --ttl 15m`                | backlog | Create `freeze-<name>` lock. |
-| L-161  | `unfreeze <name>`                        | backlog | Owner-checked; supports `--force`. |
-| L-162  | Guard checks freeze before acquiring     | backlog | Abort if active freeze exists. |
-| L-163  | Auto-prune expired freeze in guard       | backlog | Remove expired freeze deterministically. |
-| L-164  | Status highlights freeze locks           | backlog | Distinct labeling in output/JSON. |
+| L-160  | `freeze <name> --ttl 15m`                | done    | Create `freeze-<name>` lock. beads:lokt-scl |
+| L-161  | `unfreeze <name>`                        | done    | Owner-checked; supports `--force`. beads:lokt-scl |
+| L-162  | Guard checks freeze before acquiring     | done    | Abort if active freeze exists. beads:lokt-scl |
+| L-163  | Auto-prune expired freeze in guard       | done    | Remove expired freeze deterministically. beads:lokt-scl |
+| L-164  | Status highlights freeze locks           | done    | Distinct labeling in output/JSON. beads:lokt-scl |
 
 ## Audit Log
 
