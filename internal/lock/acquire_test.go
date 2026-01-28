@@ -460,3 +460,255 @@ func TestAcquireNilAuditorDoesNotPanic(t *testing.T) {
 		t.Fatalf("Acquire() error = %v", err)
 	}
 }
+
+// Auto-prune tests for L-201
+
+func TestAcquire_AutoPrunesDeadPIDLock(t *testing.T) {
+	root := t.TempDir()
+
+	// Get current hostname for same-host lock
+	hostname, err := os.Hostname()
+	if err != nil {
+		t.Skipf("Cannot get hostname: %v", err)
+	}
+
+	// Create a lock with a dead PID on same host
+	locksDir := filepath.Join(root, "locks")
+	if err := os.MkdirAll(locksDir, 0750); err != nil {
+		t.Fatalf("MkdirAll error = %v", err)
+	}
+
+	deadPIDLock := &lockfile.Lock{
+		Name:       "auto-prune-test",
+		Owner:      "dead-process",
+		Host:       hostname, // Same host so PID check applies
+		PID:        999999,   // Very unlikely to be a real PID
+		AcquiredAt: time.Now(),
+		TTLSec:     0, // No TTL, relies on PID check
+	}
+	path := filepath.Join(locksDir, "auto-prune-test.json")
+	if err := lockfile.Write(path, deadPIDLock); err != nil {
+		t.Fatalf("Write dead PID lock error = %v", err)
+	}
+
+	// Immediate Acquire should auto-prune the dead PID lock and succeed
+	err = Acquire(root, "auto-prune-test", AcquireOptions{})
+	if err != nil {
+		t.Fatalf("Acquire() should auto-prune dead PID lock, got error = %v", err)
+	}
+
+	// Verify we now own the lock
+	newLock, err := lockfile.Read(path)
+	if err != nil {
+		t.Fatalf("Read new lock error = %v", err)
+	}
+	if newLock.Owner == "dead-process" {
+		t.Error("Lock should have been acquired by us, not 'dead-process'")
+	}
+	if newLock.PID != os.Getpid() {
+		t.Errorf("Lock PID = %d, want %d (current process)", newLock.PID, os.Getpid())
+	}
+}
+
+func TestAcquire_NoAutoPruneCrossHost(t *testing.T) {
+	root := t.TempDir()
+
+	// Create a lock from a different host
+	locksDir := filepath.Join(root, "locks")
+	if err := os.MkdirAll(locksDir, 0750); err != nil {
+		t.Fatalf("MkdirAll error = %v", err)
+	}
+
+	crossHostLock := &lockfile.Lock{
+		Name:       "cross-host-test",
+		Owner:      "remote-process",
+		Host:       "other-host.example.com", // Different host
+		PID:        999999,
+		AcquiredAt: time.Now(),
+		TTLSec:     0,
+	}
+	path := filepath.Join(locksDir, "cross-host-test.json")
+	if err := lockfile.Write(path, crossHostLock); err != nil {
+		t.Fatalf("Write cross-host lock error = %v", err)
+	}
+
+	// Immediate Acquire should NOT auto-prune cross-host lock
+	err := Acquire(root, "cross-host-test", AcquireOptions{})
+	if err == nil {
+		t.Fatal("Acquire() should fail for cross-host lock (cannot verify PID)")
+	}
+
+	var held *HeldError
+	if !errors.As(err, &held) {
+		t.Fatalf("error should be *HeldError, got %T", err)
+	}
+
+	// Lock should still belong to remote process
+	existingLock, err := lockfile.Read(path)
+	if err != nil {
+		t.Fatalf("Read lock error = %v", err)
+	}
+	if existingLock.Owner != "remote-process" {
+		t.Errorf("Lock owner = %q, should still be 'remote-process'", existingLock.Owner)
+	}
+}
+
+func TestAcquire_NoAutoPruneLivePID(t *testing.T) {
+	root := t.TempDir()
+
+	// Get current hostname
+	hostname, err := os.Hostname()
+	if err != nil {
+		t.Skipf("Cannot get hostname: %v", err)
+	}
+
+	// Create a lock with our own PID (definitely alive)
+	locksDir := filepath.Join(root, "locks")
+	if err := os.MkdirAll(locksDir, 0750); err != nil {
+		t.Fatalf("MkdirAll error = %v", err)
+	}
+
+	livePIDLock := &lockfile.Lock{
+		Name:       "live-pid-test",
+		Owner:      "other-owner",
+		Host:       hostname,
+		PID:        os.Getpid(), // Our own PID, definitely alive
+		AcquiredAt: time.Now(),
+		TTLSec:     0,
+	}
+	path := filepath.Join(locksDir, "live-pid-test.json")
+	if err := lockfile.Write(path, livePIDLock); err != nil {
+		t.Fatalf("Write live PID lock error = %v", err)
+	}
+
+	// Immediate Acquire should NOT auto-prune live PID lock
+	err = Acquire(root, "live-pid-test", AcquireOptions{})
+	if err == nil {
+		t.Fatal("Acquire() should fail for live PID lock")
+	}
+
+	var held *HeldError
+	if !errors.As(err, &held) {
+		t.Fatalf("error should be *HeldError, got %T", err)
+	}
+
+	// Lock should still exist with original owner
+	existingLock, err := lockfile.Read(path)
+	if err != nil {
+		t.Fatalf("Read lock error = %v", err)
+	}
+	if existingLock.Owner != "other-owner" {
+		t.Errorf("Lock owner = %q, should still be 'other-owner'", existingLock.Owner)
+	}
+}
+
+func TestAcquire_NoAutoPruneExpiredTTLWithLivePID(t *testing.T) {
+	root := t.TempDir()
+
+	// Get current hostname
+	hostname, err := os.Hostname()
+	if err != nil {
+		t.Skipf("Cannot get hostname: %v", err)
+	}
+
+	// Create an expired lock with a live PID
+	locksDir := filepath.Join(root, "locks")
+	if err := os.MkdirAll(locksDir, 0750); err != nil {
+		t.Fatalf("MkdirAll error = %v", err)
+	}
+
+	expiredLiveLock := &lockfile.Lock{
+		Name:       "expired-live-test",
+		Owner:      "other-owner",
+		Host:       hostname,
+		PID:        os.Getpid(),                       // Our PID, definitely alive
+		AcquiredAt: time.Now().Add(-10 * time.Minute), // 10 minutes ago
+		TTLSec:     60,                                // 1 minute TTL = expired
+	}
+	path := filepath.Join(locksDir, "expired-live-test.json")
+	if err := lockfile.Write(path, expiredLiveLock); err != nil {
+		t.Fatalf("Write expired live lock error = %v", err)
+	}
+
+	// Immediate Acquire should NOT auto-prune (TTL expired but PID alive)
+	// Auto-prune only triggers on ReasonDeadPID, not ReasonExpired
+	err = Acquire(root, "expired-live-test", AcquireOptions{})
+	if err == nil {
+		t.Fatal("Acquire() should fail - auto-prune only works for dead PIDs, not TTL expiry")
+	}
+
+	var held *HeldError
+	if !errors.As(err, &held) {
+		t.Fatalf("error should be *HeldError, got %T", err)
+	}
+}
+
+func TestAcquire_AutoPruneEmitsAuditEvent(t *testing.T) {
+	root := t.TempDir()
+	auditor := audit.NewWriter(root)
+
+	// Get current hostname
+	hostname, err := os.Hostname()
+	if err != nil {
+		t.Skipf("Cannot get hostname: %v", err)
+	}
+
+	// Create a lock with a dead PID
+	locksDir := filepath.Join(root, "locks")
+	if err := os.MkdirAll(locksDir, 0750); err != nil {
+		t.Fatalf("MkdirAll error = %v", err)
+	}
+
+	deadPIDLock := &lockfile.Lock{
+		Name:       "audit-prune-test",
+		Owner:      "dead-process",
+		Host:       hostname,
+		PID:        999999, // Very unlikely to be a real PID
+		AcquiredAt: time.Now(),
+		TTLSec:     0,
+	}
+	path := filepath.Join(locksDir, "audit-prune-test.json")
+	if err := lockfile.Write(path, deadPIDLock); err != nil {
+		t.Fatalf("Write dead PID lock error = %v", err)
+	}
+
+	// Acquire should auto-prune and emit audit event
+	err = Acquire(root, "audit-prune-test", AcquireOptions{Auditor: auditor})
+	if err != nil {
+		t.Fatalf("Acquire() error = %v", err)
+	}
+
+	events := readAuditEvents(t, root)
+	// Should have 2 events: auto-prune and acquire
+	if len(events) != 2 {
+		t.Fatalf("Expected 2 audit events (auto-prune + acquire), got %d", len(events))
+	}
+
+	// First event should be auto-prune
+	pruneEvent := events[0]
+	if pruneEvent.Event != audit.EventAutoPrune {
+		t.Errorf("First event = %q, want %q", pruneEvent.Event, audit.EventAutoPrune)
+	}
+	if pruneEvent.Name != "audit-prune-test" {
+		t.Errorf("Name = %q, want %q", pruneEvent.Name, "audit-prune-test")
+	}
+	// Check pruned holder info
+	if pruneEvent.Extra == nil {
+		t.Fatal("Extra should contain pruned holder info")
+	}
+	if pruneEvent.Extra["pruned_owner"] != "dead-process" {
+		t.Errorf("pruned_owner = %v, want 'dead-process'", pruneEvent.Extra["pruned_owner"])
+	}
+	if pruneEvent.Extra["pruned_host"] != hostname {
+		t.Errorf("pruned_host = %v, want %q", pruneEvent.Extra["pruned_host"], hostname)
+	}
+	if int(pruneEvent.Extra["pruned_pid"].(float64)) != 999999 {
+		t.Errorf("pruned_pid = %v, want 999999", pruneEvent.Extra["pruned_pid"])
+	}
+
+	// Second event should be acquire
+	acquireEvent := events[1]
+	if acquireEvent.Event != audit.EventAcquire {
+		t.Errorf("Second event = %q, want %q", acquireEvent.Event, audit.EventAcquire)
+	}
+}

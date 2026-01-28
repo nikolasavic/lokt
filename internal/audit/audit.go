@@ -16,6 +16,7 @@ const (
 	EventRelease    = "release"     // Lock released normally
 	EventForceBreak = "force-break" // Lock removed via --force
 	EventStaleBreak = "stale-break" // Lock removed via --break-stale
+	EventAutoPrune  = "auto-prune"  // Lock auto-removed (dead PID on same host)
 	EventRenew      = "renew"       // Lock TTL renewed (heartbeat)
 )
 
