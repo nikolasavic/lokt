@@ -11,13 +11,14 @@ import (
 
 // Event types for audit log entries.
 const (
-	EventAcquire    = "acquire"     // Lock successfully acquired
-	EventDeny       = "deny"        // Lock acquisition denied (held by another)
-	EventRelease    = "release"     // Lock released normally
-	EventForceBreak = "force-break" // Lock removed via --force
-	EventStaleBreak = "stale-break" // Lock removed via --break-stale
-	EventAutoPrune  = "auto-prune"  // Lock auto-removed (dead PID on same host)
-	EventRenew      = "renew"       // Lock TTL renewed (heartbeat)
+	EventAcquire      = "acquire"       // Lock successfully acquired
+	EventDeny         = "deny"          // Lock acquisition denied (held by another)
+	EventRelease      = "release"       // Lock released normally
+	EventForceBreak   = "force-break"   // Lock removed via --force
+	EventStaleBreak   = "stale-break"   // Lock removed via --break-stale
+	EventAutoPrune    = "auto-prune"    // Lock auto-removed (dead PID on same host)
+	EventCorruptBreak = "corrupt-break" // Lock removed (corrupted/malformed file)
+	EventRenew        = "renew"         // Lock TTL renewed (heartbeat)
 )
 
 // Event represents a single audit log entry.

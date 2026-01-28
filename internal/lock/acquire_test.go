@@ -713,3 +713,101 @@ func TestAcquire_AutoPruneEmitsAuditEvent(t *testing.T) {
 		t.Errorf("Second event = %q, want %q", acquireEvent.Event, audit.EventAcquire)
 	}
 }
+
+// Corrupted lock file tests for L-203
+
+func TestAcquire_AutoPrunesCorruptedLock(t *testing.T) {
+	root := t.TempDir()
+
+	// Create a corrupted lock file
+	locksDir := filepath.Join(root, "locks")
+	if err := os.MkdirAll(locksDir, 0750); err != nil {
+		t.Fatalf("MkdirAll error = %v", err)
+	}
+	path := filepath.Join(locksDir, "corrupt-test.json")
+	if err := os.WriteFile(path, []byte("not valid json{{{"), 0600); err != nil {
+		t.Fatalf("WriteFile error = %v", err)
+	}
+
+	// Acquire should auto-prune the corrupted lock and succeed
+	err := Acquire(root, "corrupt-test", AcquireOptions{})
+	if err != nil {
+		t.Fatalf("Acquire() should auto-prune corrupted lock, got error = %v", err)
+	}
+
+	// Verify we now own the lock
+	newLock, err := lockfile.Read(path)
+	if err != nil {
+		t.Fatalf("Read new lock error = %v", err)
+	}
+	if newLock.PID != os.Getpid() {
+		t.Errorf("Lock PID = %d, want %d (current process)", newLock.PID, os.Getpid())
+	}
+}
+
+func TestAcquire_CorruptedLockEmitsAuditEvent(t *testing.T) {
+	root := t.TempDir()
+	auditor := audit.NewWriter(root)
+
+	// Create a corrupted lock file
+	locksDir := filepath.Join(root, "locks")
+	if err := os.MkdirAll(locksDir, 0750); err != nil {
+		t.Fatalf("MkdirAll error = %v", err)
+	}
+	path := filepath.Join(locksDir, "corrupt-audit.json")
+	if err := os.WriteFile(path, []byte(`{"broken`), 0600); err != nil {
+		t.Fatalf("WriteFile error = %v", err)
+	}
+
+	// Acquire should auto-prune and emit audit events
+	err := Acquire(root, "corrupt-audit", AcquireOptions{Auditor: auditor})
+	if err != nil {
+		t.Fatalf("Acquire() error = %v", err)
+	}
+
+	events := readAuditEvents(t, root)
+	// Should have 2 events: corrupt-break and acquire
+	if len(events) != 2 {
+		t.Fatalf("Expected 2 audit events (corrupt-break + acquire), got %d", len(events))
+	}
+
+	// First event should be corrupt-break
+	corruptEvent := events[0]
+	if corruptEvent.Event != audit.EventCorruptBreak {
+		t.Errorf("First event = %q, want %q", corruptEvent.Event, audit.EventCorruptBreak)
+	}
+	if corruptEvent.Name != "corrupt-audit" {
+		t.Errorf("Name = %q, want %q", corruptEvent.Name, "corrupt-audit")
+	}
+
+	// Second event should be acquire
+	acquireEvt := events[1]
+	if acquireEvt.Event != audit.EventAcquire {
+		t.Errorf("Second event = %q, want %q", acquireEvt.Event, audit.EventAcquire)
+	}
+}
+
+func TestTryBreakStale_RemovesCorruptedLock(t *testing.T) {
+	root := t.TempDir()
+
+	// Create a corrupted lock file
+	locksDir := filepath.Join(root, "locks")
+	if err := os.MkdirAll(locksDir, 0750); err != nil {
+		t.Fatalf("MkdirAll error = %v", err)
+	}
+	path := filepath.Join(locksDir, "corrupt-stale.json")
+	if err := os.WriteFile(path, []byte("garbage data"), 0600); err != nil {
+		t.Fatalf("WriteFile error = %v", err)
+	}
+
+	// tryBreakStale should remove corrupted lock
+	removed := tryBreakStale(root, "corrupt-stale")
+	if !removed {
+		t.Error("tryBreakStale() should return true for corrupted lock")
+	}
+
+	// File should be gone
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Error("Corrupted lock file should be deleted")
+	}
+}

@@ -79,6 +79,20 @@ func Release(rootDir, name string, opts ReleaseOptions) error {
 		if os.IsNotExist(err) {
 			return ErrNotFound
 		}
+		if errors.Is(err, lockfile.ErrCorrupted) {
+			// Corrupted lock file — handle based on release mode
+			if opts.Force || opts.BreakStale {
+				if removeErr := os.Remove(path); removeErr != nil {
+					if os.IsNotExist(removeErr) {
+						return ErrNotFound
+					}
+					return fmt.Errorf("remove corrupted lock: %w", removeErr)
+				}
+				emitCorruptBreakReleaseEvent(opts.Auditor, name)
+				return nil
+			}
+			return fmt.Errorf("lock %q has corrupted data: %w", name, err)
+		}
 		return fmt.Errorf("read lock: %w", err)
 	}
 
@@ -112,6 +126,21 @@ func Release(rootDir, name string, opts ReleaseOptions) error {
 	emitReleaseEvent(opts.Auditor, existing, opts)
 
 	return nil
+}
+
+// emitCorruptBreakReleaseEvent emits a corrupt-break audit event during release. Safe to call with nil auditor.
+func emitCorruptBreakReleaseEvent(w *audit.Writer, name string) {
+	if w == nil {
+		return
+	}
+	id := identity.Current()
+	w.Emit(&audit.Event{
+		Event: audit.EventCorruptBreak,
+		Name:  name,
+		Owner: id.Owner,
+		Host:  id.Host,
+		PID:   id.PID,
+	})
 }
 
 // emitReleaseEvent emits the appropriate release audit event. Safe to call with nil auditor.

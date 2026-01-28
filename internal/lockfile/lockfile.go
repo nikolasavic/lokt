@@ -38,6 +38,9 @@ func (l *Lock) Age() time.Duration {
 // ErrInvalidName is returned when a lock name fails validation.
 var ErrInvalidName = errors.New("invalid lock name")
 
+// ErrCorrupted is returned when a lock file exists but contains malformed JSON.
+var ErrCorrupted = errors.New("corrupted lock file")
+
 // validNamePattern matches allowed lock name characters: alphanumeric, dots, hyphens, underscores.
 var validNamePattern = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 
@@ -75,9 +78,14 @@ func Read(path string) (*Lock, error) {
 	if err != nil {
 		return nil, err
 	}
+	if len(data) == 0 {
+		// Empty file — likely a race (file created but not yet written).
+		// Return a generic error, not ErrCorrupted, so callers retry.
+		return nil, fmt.Errorf("empty lock file")
+	}
 	var lock Lock
 	if err := json.Unmarshal(data, &lock); err != nil {
-		return nil, fmt.Errorf("invalid lock file: %w", err)
+		return nil, fmt.Errorf("%w: %w", ErrCorrupted, err)
 	}
 	return &lock, nil
 }

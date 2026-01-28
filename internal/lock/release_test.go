@@ -429,3 +429,118 @@ func TestReleaseNilAuditorDoesNotPanic(t *testing.T) {
 		t.Fatalf("Release() error = %v", err)
 	}
 }
+
+// Corrupted lock file tests for L-203
+
+func TestReleaseBreakStale_CorruptedLock(t *testing.T) {
+	root := t.TempDir()
+
+	// Create a corrupted lock file
+	locksDir := filepath.Join(root, "locks")
+	if err := os.MkdirAll(locksDir, 0700); err != nil {
+		t.Fatalf("MkdirAll error = %v", err)
+	}
+	path := filepath.Join(locksDir, "corrupt-stale.json")
+	if err := os.WriteFile(path, []byte("not json{{{"), 0600); err != nil {
+		t.Fatalf("WriteFile error = %v", err)
+	}
+
+	// BreakStale should remove corrupted lock
+	err := Release(root, "corrupt-stale", ReleaseOptions{BreakStale: true})
+	if err != nil {
+		t.Fatalf("Release(BreakStale=true) error = %v, want nil for corrupted lock", err)
+	}
+
+	// File should be gone
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Error("Corrupted lock file should be deleted after break-stale")
+	}
+}
+
+func TestReleaseForce_CorruptedLock(t *testing.T) {
+	root := t.TempDir()
+
+	// Create a corrupted lock file
+	locksDir := filepath.Join(root, "locks")
+	if err := os.MkdirAll(locksDir, 0700); err != nil {
+		t.Fatalf("MkdirAll error = %v", err)
+	}
+	path := filepath.Join(locksDir, "corrupt-force.json")
+	if err := os.WriteFile(path, []byte(`[1,2,3]`), 0600); err != nil {
+		t.Fatalf("WriteFile error = %v", err)
+	}
+
+	// Force release should remove corrupted lock
+	err := Release(root, "corrupt-force", ReleaseOptions{Force: true})
+	if err != nil {
+		t.Fatalf("Release(Force=true) error = %v, want nil for corrupted lock", err)
+	}
+
+	// File should be gone
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Error("Corrupted lock file should be deleted after force release")
+	}
+}
+
+func TestReleaseNormal_CorruptedLockReturnsError(t *testing.T) {
+	root := t.TempDir()
+
+	// Create a corrupted lock file
+	locksDir := filepath.Join(root, "locks")
+	if err := os.MkdirAll(locksDir, 0700); err != nil {
+		t.Fatalf("MkdirAll error = %v", err)
+	}
+	path := filepath.Join(locksDir, "corrupt-normal.json")
+	if err := os.WriteFile(path, []byte("garbage"), 0600); err != nil {
+		t.Fatalf("WriteFile error = %v", err)
+	}
+
+	// Normal release should return error for corrupted lock
+	err := Release(root, "corrupt-normal", ReleaseOptions{})
+	if err == nil {
+		t.Fatal("Release() should fail for corrupted lock without force/break-stale")
+	}
+
+	if !errors.Is(err, lockfile.ErrCorrupted) {
+		t.Errorf("Release() error should wrap ErrCorrupted, got %v", err)
+	}
+
+	// File should still exist
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		t.Error("Corrupted lock file should NOT be deleted during normal release")
+	}
+}
+
+func TestReleaseBreakStale_CorruptedLockEmitsAuditEvent(t *testing.T) {
+	root := t.TempDir()
+	auditor := audit.NewWriter(root)
+
+	// Create a corrupted lock file
+	locksDir := filepath.Join(root, "locks")
+	if err := os.MkdirAll(locksDir, 0700); err != nil {
+		t.Fatalf("MkdirAll error = %v", err)
+	}
+	path := filepath.Join(locksDir, "corrupt-audit.json")
+	if err := os.WriteFile(path, []byte("bad data"), 0600); err != nil {
+		t.Fatalf("WriteFile error = %v", err)
+	}
+
+	// BreakStale with auditor
+	err := Release(root, "corrupt-audit", ReleaseOptions{BreakStale: true, Auditor: auditor})
+	if err != nil {
+		t.Fatalf("Release(BreakStale=true) error = %v", err)
+	}
+
+	events := readReleaseAuditEvents(t, root)
+	if len(events) != 1 {
+		t.Fatalf("Expected 1 audit event, got %d", len(events))
+	}
+
+	e := events[0]
+	if e.Event != audit.EventCorruptBreak {
+		t.Errorf("Event = %q, want %q", e.Event, audit.EventCorruptBreak)
+	}
+	if e.Name != "corrupt-audit" {
+		t.Errorf("Name = %q, want %q", e.Name, "corrupt-audit")
+	}
+}

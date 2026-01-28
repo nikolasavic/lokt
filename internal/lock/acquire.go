@@ -74,6 +74,20 @@ func Acquire(rootDir, name string, opts AcquireOptions) error {
 			// Lock exists - read it and check if stale
 			existing, readErr := lockfile.Read(path)
 			if readErr != nil {
+				if errors.Is(readErr, lockfile.ErrCorrupted) {
+					// Corrupted lock file — no valid holder, safe to remove
+					if removeErr := os.Remove(path); removeErr == nil {
+						emitCorruptBreakEvent(opts.Auditor, id, name)
+
+						// Retry acquisition once
+						f2, retryErr := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
+						if retryErr == nil {
+							_ = f2.Close()
+							goto writeLock
+						}
+						// Retry failed (race condition), fall through to HeldError
+					}
+				}
 				// File exists but unreadable (likely being written by another process)
 				// Return a synthetic HeldError so AcquireWithWait will retry
 				return &HeldError{Lock: &lockfile.Lock{Name: name}}
@@ -198,6 +212,10 @@ func tryBreakStale(rootDir, name string) bool {
 	path := root.LockFilePath(rootDir, name)
 	existing, err := lockfile.Read(path)
 	if err != nil {
+		// Corrupted lock file is unconditionally stale — remove it
+		if errors.Is(err, lockfile.ErrCorrupted) {
+			return os.Remove(path) == nil
+		}
 		return false
 	}
 
@@ -246,6 +264,21 @@ func emitDenyEvent(w *audit.Writer, id identity.Identity, name string, ttlSec in
 		PID:    id.PID,
 		TTLSec: ttlSec,
 		Extra:  extra,
+	})
+}
+
+// emitCorruptBreakEvent emits a corrupt-break audit event. Safe to call with nil auditor.
+// Records that a corrupted/malformed lock file was removed.
+func emitCorruptBreakEvent(w *audit.Writer, id identity.Identity, name string) {
+	if w == nil {
+		return
+	}
+	w.Emit(&audit.Event{
+		Event: audit.EventCorruptBreak,
+		Name:  name,
+		Owner: id.Owner,
+		Host:  id.Host,
+		PID:   id.PID,
 	})
 }
 

@@ -98,6 +98,67 @@ func TestReadInvalidJSON(t *testing.T) {
 	if err == nil {
 		t.Error("Read() expected error for invalid JSON")
 	}
+	if !errors.Is(err, ErrCorrupted) {
+		t.Errorf("Read() error should wrap ErrCorrupted, got %v", err)
+	}
+}
+
+func TestReadCorruptedVariants(t *testing.T) {
+	tests := []struct {
+		name    string
+		content []byte
+		wantErr error
+	}{
+		{"partial JSON", []byte(`{"name":"test"`), ErrCorrupted},
+		{"binary garbage", []byte{0x00, 0xFF, 0xFE, 0x89}, ErrCorrupted},
+		{"array instead of object", []byte(`[1,2,3]`), ErrCorrupted},
+		{"plain text", []byte("hello world"), ErrCorrupted},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "corrupt.lock")
+			if err := os.WriteFile(path, tt.content, 0600); err != nil {
+				t.Fatal(err)
+			}
+
+			_, err := Read(path)
+			if err == nil {
+				t.Fatal("Read() expected error for corrupted content")
+			}
+			if !errors.Is(err, tt.wantErr) {
+				t.Errorf("Read() error = %v, want errors.Is(%v)", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestReadEmptyFileIsNotCorrupted(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "empty.lock")
+	if err := os.WriteFile(path, []byte{}, 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := Read(path)
+	if err == nil {
+		t.Fatal("Read() expected error for empty file")
+	}
+	// Empty file should NOT be ErrCorrupted (it's a race, not corruption)
+	if errors.Is(err, ErrCorrupted) {
+		t.Error("Read() empty file should not return ErrCorrupted")
+	}
+}
+
+func TestReadNotFoundIsNotCorrupted(t *testing.T) {
+	_, err := Read("/nonexistent/path/lock.json")
+	if err == nil {
+		t.Fatal("Read() expected error for nonexistent file")
+	}
+	if errors.Is(err, ErrCorrupted) {
+		t.Error("Read() missing file should not return ErrCorrupted")
+	}
 }
 
 func TestValidateName(t *testing.T) {
