@@ -192,7 +192,7 @@ func emitAcquireEvent(w *audit.Writer, id identity.Identity, name string, ttlSec
 	if w == nil {
 		return
 	}
-	w.Emit(audit.Event{
+	w.Emit(&audit.Event{
 		Event:  audit.EventAcquire,
 		Name:   name,
 		Owner:  id.Owner,
@@ -212,7 +212,7 @@ func emitDenyEvent(w *audit.Writer, id identity.Identity, name string, ttlSec in
 		"holder_host":  holder.Host,
 		"holder_pid":   holder.PID,
 	}
-	w.Emit(audit.Event{
+	w.Emit(&audit.Event{
 		Event:  audit.EventDeny,
 		Name:   name,
 		Owner:  id.Owner,

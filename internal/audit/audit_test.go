@@ -92,7 +92,7 @@ func TestWriterCreatesFileOnFirstEmit(t *testing.T) {
 		PID:   12345,
 	}
 
-	w.Emit(event)
+	w.Emit(&event)
 
 	path := filepath.Join(dir, "audit.log")
 	if _, err := os.Stat(path); os.IsNotExist(err) {
@@ -110,8 +110,8 @@ func TestWriterAppendsMultipleEvents(t *testing.T) {
 		{Event: EventRelease, Name: "lock1", Owner: "alice", Host: "h1", PID: 1},
 	}
 
-	for _, e := range events {
-		w.Emit(e)
+	for i := range events {
+		w.Emit(&events[i])
 	}
 
 	// Read and verify JSONL format (one JSON object per line)
@@ -120,7 +120,7 @@ func TestWriterAppendsMultipleEvents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to open audit.log: %v", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	scanner := bufio.NewScanner(f)
 	lineCount := 0
@@ -146,7 +146,7 @@ func TestWriterSetsTimestampIfMissing(t *testing.T) {
 	w := NewWriter(dir)
 
 	before := time.Now()
-	w.Emit(Event{
+	w.Emit(&Event{
 		Event: EventAcquire,
 		Name:  "test",
 		Owner: "alice",
@@ -178,7 +178,7 @@ func TestWriterHandlesMissingDirectory(t *testing.T) {
 	w := NewWriter("/nonexistent/path/that/does/not/exist")
 
 	// This should not panic
-	w.Emit(Event{
+	w.Emit(&Event{
 		Event: EventAcquire,
 		Name:  "test",
 		Owner: "alice",

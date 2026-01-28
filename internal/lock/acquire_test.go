@@ -365,7 +365,7 @@ func readAuditEvents(t *testing.T, rootDir string) []audit.Event {
 		}
 		t.Fatalf("Open audit.log: %v", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	var events []audit.Event
 	scanner := bufio.NewScanner(f)

@@ -47,7 +47,7 @@ func NewWriter(rootDir string) *Writer {
 // Emit appends an event to the audit log.
 // This method never returns an error. If writing fails, the error is logged to stderr.
 // This ensures lock operations are never blocked by audit failures.
-func (w *Writer) Emit(e Event) {
+func (w *Writer) Emit(e *Event) {
 	if e.Timestamp.IsZero() {
 		e.Timestamp = time.Now()
 	}
@@ -68,7 +68,7 @@ func (w *Writer) Emit(e Event) {
 		fmt.Fprintf(os.Stderr, "lokt: audit open error: %v\n", err)
 		return
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	if _, err := f.Write(data); err != nil {
 		fmt.Fprintf(os.Stderr, "lokt: audit write error: %v\n", err)

@@ -128,7 +128,7 @@ func emitReleaseEvent(w *audit.Writer, lock *lockfile.Lock, opts ReleaseOptions)
 	}
 
 	id := identity.Current()
-	w.Emit(audit.Event{
+	w.Emit(&audit.Event{
 		Event:  eventType,
 		Name:   lock.Name,
 		Owner:  id.Owner,

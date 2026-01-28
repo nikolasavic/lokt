@@ -689,7 +689,7 @@ func cmdAudit(args []string) int {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return ExitError
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
