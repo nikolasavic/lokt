@@ -12,7 +12,22 @@ Lokt is a tiny CLI that serializes high-risk operations (deploys, migrations,
 terraform apply, release cuts) across multiple terminals/agents on the same
 machine — without trusting the LLM to “remember”.
 
-It uses atomic lockfiles under your repo’s shared git worktree directory.
+It uses atomic lockfiles under your repo's shared git worktree directory.
+
+INSTALL
+-------
+
+  curl -fsSL https://raw.githubusercontent.com/nikolasavic/lokt/main/scripts/install.sh | sh
+
+Or specify a version:
+
+  LOKT_VERSION=v1.0.0 curl -fsSL .../install.sh | sh
+
+Environment variables:
+  LOKT_VERSION      Pin to specific version (default: latest)
+  LOKT_INSTALL_DIR  Override install directory (default: ~/.local/bin)
+
+Supported platforms: macOS (amd64, arm64), Linux (amd64, arm64)
 
 CORE COMMANDS
 -------------

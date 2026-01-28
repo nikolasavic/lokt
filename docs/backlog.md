@@ -68,7 +68,7 @@
 | Ticket | Title                                   | Status  | Notes |
 | ------ | --------------------------------------- | ------- | ----- |
 | L-140  | `lock --wait`                            | done | Poll until free. beads:lokt-eie |
-| L-141  | `--timeout` for wait                     | in-progress | Abort after deadline with clear exit code. beads:lokt-4u3 |
+| L-141  | `--timeout` for wait                     | done | Abort after deadline with clear exit code. beads:lokt-4u3 |
 | L-142  | Backoff + jitter                         | done | Avoid thundering herd. beads:lokt-7iv |
 | L-143  | Wait UX (`--quiet` / periodic updates)   | backlog | Optional progress lines. |
 
@@ -113,5 +113,5 @@
 | L-185  | Lint/format config                       | done | gofmt, govet, golangci-lint configured. |
 | L-186  | CI (linux/mac)                           | done | Build + test matrix. beads:lokt-uyq |
 | L-187  | Release packaging                         | done | goreleaser binaries. beads:lokt-uyq |
-| L-188  | Install script / distribution            | backlog | `curl | sh` or brew. |
+| L-188  | Install script / distribution            | in-progress | `curl | sh` install. beads:lokt-v03 |
 | L-189  | Docs + examples                           | done | README.txt with CLI usage and examples. |
