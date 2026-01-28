@@ -12,6 +12,18 @@
 
 ---
 
+## Hardening & Reliability (Priority)
+
+| Ticket | Title                                   | Status  | Notes |
+| ------ | --------------------------------------- | ------- | ----- |
+| L-200  | Heartbeat/lease renewal for guards       | ready   | Guard auto-renews TTL while child runs. Without this, long builds lose their lock. |
+| L-201  | Auto-prune dead locks before acquire     | ready   | If PID dead + same host, silently clean up stale lock instead of failing. Self-healing. |
+| L-202  | `lokt doctor` health check               | ready   | Pre-flight validation: dir writable, no NFS, no clock skew. One command to verify setup. |
+| L-203  | Handle corrupted lock files gracefully   | ready   | Malformed JSON treated as stale, not crash. Defensive parsing with clear logging. |
+| L-204  | Warn/refuse on network filesystems       | ready   | Detect NFS/CIFS, warn loudly. Atomic exclusive create not guaranteed on network FS. |
+
+---
+
 ## Infrastructure & Foundation
 
 | Ticket | Title                                   | Status  | Notes |
