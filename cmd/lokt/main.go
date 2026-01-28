@@ -438,6 +438,19 @@ func cmdGuard(args []string) int {
 	}
 	defer releaseLock()
 
+	// Start heartbeat goroutine if TTL is set
+	var cancelHeartbeat context.CancelFunc
+	if *ttl > 0 {
+		var heartbeatCtx context.Context
+		heartbeatCtx, cancelHeartbeat = context.WithCancel(context.Background())
+		go runHeartbeat(heartbeatCtx, rootDir, name, *ttl, auditor)
+	}
+	defer func() {
+		if cancelHeartbeat != nil {
+			cancelHeartbeat()
+		}
+	}()
+
 	// Set up signal handling
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
@@ -478,6 +491,34 @@ func cmdGuard(args []string) int {
 		}
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return ExitError
+	}
+}
+
+// runHeartbeat periodically renews the lock's TTL while the context is active.
+// It runs at TTL/2 intervals to ensure the lock is renewed before expiration.
+// Renewal failures are logged as warnings but don't stop the heartbeat.
+func runHeartbeat(ctx context.Context, rootDir, name string, ttl time.Duration, auditor *audit.Writer) {
+	// Calculate interval: TTL/2, with a minimum of 500ms
+	interval := ttl / 2
+	const minInterval = 500 * time.Millisecond
+	if interval < minInterval {
+		interval = minInterval
+	}
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			err := lock.Renew(rootDir, name, lock.RenewOptions{Auditor: auditor})
+			if err != nil {
+				// Log warning but continue - child may still complete successfully
+				fmt.Fprintf(os.Stderr, "warning: lock renewal failed: %v\n", err)
+			}
+		}
 	}
 }
 

@@ -16,6 +16,7 @@ const (
 	EventRelease    = "release"     // Lock released normally
 	EventForceBreak = "force-break" // Lock removed via --force
 	EventStaleBreak = "stale-break" // Lock removed via --break-stale
+	EventRenew      = "renew"       // Lock TTL renewed (heartbeat)
 )
 
 // Event represents a single audit log entry.
