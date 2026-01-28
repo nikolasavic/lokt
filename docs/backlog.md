@@ -16,7 +16,7 @@
 
 | Ticket | Title                                   | Status  | Notes |
 | ------ | --------------------------------------- | ------- | ----- |
-| L-200  | Heartbeat/lease renewal for guards       | ready   | Guard auto-renews TTL while child runs. Without this, long builds lose their lock. |
+| L-200  | Heartbeat/lease renewal for guards       | in-progress | Guard auto-renews TTL while child runs. Without this, long builds lose their lock. beads:lokt-dxz |
 | L-201  | Auto-prune dead locks before acquire     | ready   | If PID dead + same host, silently clean up stale lock instead of failing. Self-healing. |
 | L-202  | `lokt doctor` health check               | ready   | Pre-flight validation: dir writable, no NFS, no clock skew. One command to verify setup. |
 | L-203  | Handle corrupted lock files gracefully   | ready   | Malformed JSON treated as stale, not crash. Defensive parsing with clear logging. |
