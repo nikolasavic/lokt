@@ -215,7 +215,7 @@ func TestTailAuditLog_DetectsTruncation(t *testing.T) {
 		PID:       1,
 	}
 	data, _ := json.Marshal(initialEvent)
-	err := os.WriteFile(auditPath, append(data, '\n'), 0644)
+	err := os.WriteFile(auditPath, append(data, '\n'), 0600)
 	if err != nil {
 		t.Fatalf("Failed to write initial content: %v", err)
 	}
