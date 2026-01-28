@@ -655,14 +655,32 @@ func pidLiveness(lock *lockFile) string {
 func cmdAudit(args []string) int {
 	fs := flag.NewFlagSet("audit", flag.ExitOnError)
 	since := fs.String("since", "", "Show events since duration (1h, 30m) or timestamp (RFC3339)")
+	tail := fs.Bool("tail", false, "Follow audit log for new events (like tail -f)")
 	name := fs.String("name", "", "Filter by lock name")
 	_ = fs.Parse(args)
 
-	if *since == "" {
-		fmt.Fprintln(os.Stderr, "usage: lokt audit --since <duration|timestamp> [--name <lock>]")
-		fmt.Fprintln(os.Stderr, "  duration: 1h, 30m, 24h")
-		fmt.Fprintln(os.Stderr, "  timestamp: 2026-01-27T10:00:00Z (RFC3339)")
+	// Validate: --since and --tail are mutually exclusive
+	if *since != "" && *tail {
+		fmt.Fprintln(os.Stderr, "error: --since and --tail are mutually exclusive")
 		return ExitUsage
+	}
+
+	// Require at least one mode
+	if *since == "" && !*tail {
+		fmt.Fprintln(os.Stderr, "usage: lokt audit --since <duration|timestamp> [--name <lock>]")
+		fmt.Fprintln(os.Stderr, "       lokt audit --tail [--name <lock>]")
+		fmt.Fprintln(os.Stderr, "")
+		fmt.Fprintln(os.Stderr, "  --since: query historical events")
+		fmt.Fprintln(os.Stderr, "    duration: 1h, 30m, 24h")
+		fmt.Fprintln(os.Stderr, "    timestamp: 2026-01-27T10:00:00Z (RFC3339)")
+		fmt.Fprintln(os.Stderr, "")
+		fmt.Fprintln(os.Stderr, "  --tail: follow log for new events (Ctrl+C to stop)")
+		return ExitUsage
+	}
+
+	// Handle tail mode
+	if *tail {
+		return cmdAuditTail(*name)
 	}
 
 	// Parse --since: try duration first, then RFC3339
@@ -752,4 +770,149 @@ func parseSince(s string) (time.Time, error) {
 	}
 
 	return time.Time{}, fmt.Errorf("not a valid duration or RFC3339 timestamp")
+}
+
+// cmdAuditTail follows the audit log for new events (like tail -f).
+// It polls the file for new content and prints matching events.
+// Exits cleanly on SIGINT/SIGTERM.
+func cmdAuditTail(nameFilter string) int {
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
+
+	rootDir, err := root.Find()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return ExitError
+	}
+
+	auditPath := filepath.Join(rootDir, "audit.log")
+	return tailAuditLog(ctx, auditPath, nameFilter)
+}
+
+// tailAuditLog implements the polling loop for following the audit log.
+// It handles file creation, truncation, and graceful shutdown.
+func tailAuditLog(ctx context.Context, path string, nameFilter string) int {
+	const pollInterval = 200 * time.Millisecond
+
+	var (
+		f      *os.File
+		offset int64
+		err    error
+	)
+
+	// Wait for file to exist
+	for {
+		f, err = os.Open(path)
+		if err == nil {
+			break
+		}
+		if !os.IsNotExist(err) {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			return ExitError
+		}
+
+		// File doesn't exist yet - wait for creation
+		select {
+		case <-ctx.Done():
+			return ExitOK
+		case <-time.After(pollInterval):
+			continue
+		}
+	}
+	defer func() { _ = f.Close() }()
+
+	// Seek to end to start tailing from current position
+	offset, err = f.Seek(0, 2) // SEEK_END
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return ExitError
+	}
+
+	reader := bufio.NewReader(f)
+
+	// Main polling loop
+	for {
+		select {
+		case <-ctx.Done():
+			return ExitOK
+		default:
+		}
+
+		// Check for file changes (truncation, deletion)
+		stat, err := os.Stat(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				// File was deleted - wait for recreation
+				_ = f.Close()
+				f = nil
+
+				for {
+					select {
+					case <-ctx.Done():
+						return ExitOK
+					case <-time.After(pollInterval):
+					}
+
+					f, err = os.Open(path)
+					if err == nil {
+						offset = 0
+						reader = bufio.NewReader(f)
+						break
+					}
+				}
+				continue
+			}
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			return ExitError
+		}
+
+		// Detect truncation (file size decreased)
+		if stat.Size() < offset {
+			_, err = f.Seek(0, 0) // SEEK_SET
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				return ExitError
+			}
+			offset = 0
+			reader.Reset(f)
+		}
+
+		// Read available lines
+		for {
+			line, err := reader.ReadBytes('\n')
+			if err != nil {
+				// No more data available
+				break
+			}
+
+			offset += int64(len(line))
+
+			// Trim newline for processing
+			line = line[:len(line)-1]
+			if len(line) == 0 {
+				continue
+			}
+
+			var event auditEvent
+			if err := json.Unmarshal(line, &event); err != nil {
+				// Skip malformed lines
+				continue
+			}
+
+			// Apply name filter if specified
+			if nameFilter != "" && event.Name != nameFilter {
+				continue
+			}
+
+			// Output matching event
+			fmt.Println(string(line))
+		}
+
+		// Wait before next poll
+		select {
+		case <-ctx.Done():
+			return ExitOK
+		case <-time.After(pollInterval):
+		}
+	}
 }

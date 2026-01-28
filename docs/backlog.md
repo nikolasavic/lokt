@@ -98,7 +98,7 @@
 | ------ | --------------------------------------- | ------- | ----- |
 | L-170  | Audit JSONL schema v1                   | done | `{ts,event,name,owner,host,pid,ttl_sec,extra}`. beads:lokt-ddd |
 | L-171  | Emit audit events (acq/deny/release/...) | done | Append-only `audit.log`. beads:lokt-cy3 |
-| L-172  | `audit --tail`                           | backlog | Tail-follow audit log. |
+| L-172  | `audit --tail`                           | in-progress | Tail-follow audit log. beads:lokt-7au |
 | L-173  | `audit --since <ts|dur>`                 | done | Basic filtering. beads:lokt-khv |
 
 ## Quality, Tests, Packaging
