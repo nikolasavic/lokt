@@ -195,21 +195,28 @@ get_install_dir() {
         return
     fi
 
-    # 2. ~/.local/bin if it exists and is writable
+    # 2. Existing install — upgrade in-place
+    existing=$(command -v lokt 2>/dev/null || true)
+    if [ -n "$existing" ]; then
+        dirname "$existing"
+        return
+    fi
+
+    # 3. ~/.local/bin if it exists and is writable
     local_bin="$HOME/.local/bin"
     if [ -d "$local_bin" ] && [ -w "$local_bin" ]; then
         echo "$local_bin"
         return
     fi
 
-    # 3. Create ~/.local/bin if $HOME is writable
+    # 4. Create ~/.local/bin if $HOME is writable
     if [ -w "$HOME" ]; then
         mkdir -p "$local_bin"
         echo "$local_bin"
         return
     fi
 
-    # 4. Fall back to /usr/local/bin (may need sudo)
+    # 5. Fall back to /usr/local/bin (may need sudo)
     echo "/usr/local/bin"
 }
 
@@ -299,13 +306,13 @@ main() {
         case ":$PATH:" in
             *":$install_dir:"*)
                 # Already in PATH
-                "$install_dir/lokt" --version
+                "$install_dir/lokt" version
                 ;;
             *)
                 warn "$install_dir is not in your PATH"
                 printf "\nAdd it to your shell config:\n"
                 printf "  ${BOLD}export PATH=\"%s:\$PATH\"${NC}\n\n" "$install_dir"
-                printf "Then run: %slokt --version%s\n" "$BOLD" "$NC"
+                printf "Then run: %slokt version%s\n" "$BOLD" "$NC"
                 ;;
         esac
     else
