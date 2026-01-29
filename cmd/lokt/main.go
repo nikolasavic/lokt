@@ -16,6 +16,7 @@ import (
 
 	"github.com/nikolasavic/lokt/internal/audit"
 	"github.com/nikolasavic/lokt/internal/doctor"
+	"github.com/nikolasavic/lokt/internal/identity"
 	"github.com/nikolasavic/lokt/internal/lock"
 	"github.com/nikolasavic/lokt/internal/lockfile"
 	"github.com/nikolasavic/lokt/internal/root"
@@ -67,6 +68,8 @@ func main() {
 		code = cmdAudit(args)
 	case "doctor":
 		code = cmdDoctor(args)
+	case "why":
+		code = cmdWhy(args)
 	case "help", "-h", "--help":
 		usage()
 	default:
@@ -105,6 +108,8 @@ func usage() {
 	fmt.Println("  audit             Query audit log")
 	fmt.Println("    --since duration|ts Show events since (e.g., 1h, 2026-01-27T10:00:00Z)")
 	fmt.Println("    --name lock         Filter by lock name")
+	fmt.Println("  why <name>        Explain why a lock cannot be acquired")
+	fmt.Println("    --json          Output in JSON format")
 	fmt.Println("  doctor            Validate lokt setup")
 	fmt.Println("    --json          Output in JSON format")
 	fmt.Println("  version           Show version info")
@@ -1067,6 +1072,312 @@ func tailAuditLog(ctx context.Context, path string, nameFilter string) int {
 		case <-time.After(pollInterval):
 		}
 	}
+}
+
+// --- why command ---
+
+// whyReason describes one reason a lock cannot be acquired.
+type whyReason struct {
+	Type    string `json:"type"`
+	Message string `json:"message"`
+
+	// Freeze fields (type=frozen)
+	FreezeOwner        string `json:"freeze_owner,omitempty"`
+	FreezeHost         string `json:"freeze_host,omitempty"`
+	FreezePID          int    `json:"freeze_pid,omitempty"`
+	FreezeAgeSec       int    `json:"freeze_age_sec,omitempty"`
+	FreezeRemainingSec int    `json:"freeze_remaining_sec,omitempty"`
+
+	// Lock holder fields (type=held, expired, dead_pid, self_held)
+	HolderOwner       string `json:"holder_owner,omitempty"`
+	HolderHost        string `json:"holder_host,omitempty"`
+	HolderPID         int    `json:"holder_pid,omitempty"`
+	HolderAgeSec      int    `json:"holder_age_sec,omitempty"`
+	HolderTTLSec      int    `json:"holder_ttl_sec,omitempty"`
+	HolderRemainSec   int    `json:"holder_remaining_sec,omitempty"`
+	HolderExpired     bool   `json:"holder_expired,omitempty"`
+	HolderPIDStatus   string `json:"holder_pid_status,omitempty"`
+	HolderStaleReason string `json:"holder_stale_reason,omitempty"`
+}
+
+// whyOutput is the JSON structure for why --json output.
+type whyOutput struct {
+	Name        string      `json:"name"`
+	Status      string      `json:"status"` // "free" or "blocked"
+	Reasons     []whyReason `json:"reasons"`
+	Suggestions []string    `json:"suggestions"`
+}
+
+func cmdWhy(args []string) int {
+	fs := flag.NewFlagSet("why", flag.ExitOnError)
+	jsonOutput := fs.Bool("json", false, "Output in JSON format")
+	_ = fs.Parse(args)
+
+	if fs.NArg() < 1 {
+		fmt.Fprintln(os.Stderr, "usage: lokt why [--json] <name>")
+		return ExitUsage
+	}
+	name := fs.Arg(0)
+
+	if err := lockfile.ValidateName(name); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return ExitUsage
+	}
+
+	rootDir, err := root.Find()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		fmt.Fprintln(os.Stderr, "hint: run 'lokt doctor' to validate your setup")
+		return ExitError
+	}
+
+	me := identity.Current()
+	var reasons []whyReason
+	var suggestions []string
+
+	// Check freeze (read-only — no auto-prune, no audit)
+	freezePath := root.LockFilePath(rootDir, lock.FreezePrefix+name)
+	freezeLock, freezeErr := lockfile.Read(freezePath)
+	if freezeErr == nil && !freezeLock.IsExpired() {
+		age := freezeLock.Age().Truncate(time.Second)
+		remaining := time.Duration(freezeLock.TTLSec)*time.Second - age
+		if remaining < 0 {
+			remaining = 0
+		}
+
+		reasons = append(reasons, whyReason{
+			Type:               "frozen",
+			Message:            fmt.Sprintf("Frozen by %s@%s for %s (%s remaining)", freezeLock.Owner, freezeLock.Host, age, remaining.Truncate(time.Second)),
+			FreezeOwner:        freezeLock.Owner,
+			FreezeHost:         freezeLock.Host,
+			FreezePID:          freezeLock.PID,
+			FreezeAgeSec:       int(age.Seconds()),
+			FreezeRemainingSec: int(remaining.Seconds()),
+		})
+
+		suggestions = append(suggestions,
+			fmt.Sprintf("Wait for freeze to expire (%s remaining)", remaining.Truncate(time.Second)),
+		)
+		if freezeLock.Owner == me.Owner && freezeLock.Host == me.Host {
+			suggestions = append(suggestions, fmt.Sprintf("lokt unfreeze %s", name))
+		} else {
+			suggestions = append(suggestions,
+				fmt.Sprintf("lokt unfreeze %s  (requires owner %s@%s)", name, freezeLock.Owner, freezeLock.Host),
+				fmt.Sprintf("lokt unfreeze --force %s  (break-glass)", name),
+			)
+		}
+	}
+
+	// Check regular lock
+	lockPath := root.LockFilePath(rootDir, name)
+	lf, lockErr := lockfile.Read(lockPath)
+
+	switch {
+	case lockErr == nil:
+		// Lock exists — will be analyzed below
+	case os.IsNotExist(lockErr):
+		// No regular lock — if also no freeze, lock is free
+		if len(reasons) == 0 {
+			if *jsonOutput {
+				out := whyOutput{Name: name, Status: "free", Reasons: []whyReason{}, Suggestions: []string{}}
+				data, _ := json.MarshalIndent(out, "", "  ")
+				fmt.Println(string(data))
+			} else {
+				fmt.Printf("Lock %q is FREE — acquisition would succeed.\n", name)
+			}
+			return ExitOK
+		}
+		// Freeze exists but no regular lock — still blocked by freeze
+		lf = nil
+	case errors.Is(lockErr, lockfile.ErrCorrupted):
+		reasons = append(reasons, whyReason{
+			Type:    "corrupted",
+			Message: "Lock file contains invalid JSON",
+		})
+		suggestions = append(suggestions,
+			fmt.Sprintf("lokt unlock --force %s  (remove corrupted lock)", name),
+		)
+		lf = nil
+	default:
+		// Unexpected read error
+		fmt.Fprintf(os.Stderr, "error: %v\n", lockErr)
+		return ExitError
+	}
+
+	if lf != nil {
+		age := lf.Age().Truncate(time.Second)
+		pidStatus := pidLivenessFromLock(lf)
+
+		// Self-held check
+		isSelf := lf.Owner == me.Owner && lf.Host == me.Host && lf.PID == me.PID
+
+		if isSelf {
+			reasons = append(reasons, whyReason{
+				Type:            "self_held",
+				Message:         fmt.Sprintf("You already hold this lock (PID %d)", lf.PID),
+				HolderOwner:     lf.Owner,
+				HolderHost:      lf.Host,
+				HolderPID:       lf.PID,
+				HolderAgeSec:    int(age.Seconds()),
+				HolderTTLSec:    lf.TTLSec,
+				HolderPIDStatus: pidStatus,
+			})
+			// No suggestions needed for self-held
+		} else {
+			// Run stale check
+			staleResult := stale.Check(lf)
+
+			reason := whyReason{
+				HolderOwner:     lf.Owner,
+				HolderHost:      lf.Host,
+				HolderPID:       lf.PID,
+				HolderAgeSec:    int(age.Seconds()),
+				HolderTTLSec:    lf.TTLSec,
+				HolderExpired:   lf.IsExpired(),
+				HolderPIDStatus: pidStatus,
+			}
+
+			if lf.TTLSec > 0 {
+				remaining := time.Duration(lf.TTLSec)*time.Second - lf.Age()
+				if remaining < 0 {
+					remaining = 0
+				}
+				reason.HolderRemainSec = int(remaining.Seconds())
+			}
+
+			switch {
+			case lf.IsExpired():
+				reason.Type = "expired"
+				reason.Message = fmt.Sprintf("Held by %s@%s (PID %d) for %s — TTL expired", lf.Owner, lf.Host, lf.PID, age)
+				reason.HolderStaleReason = string(stale.ReasonExpired)
+				suggestions = append(suggestions,
+					fmt.Sprintf("lokt unlock --break-stale %s", name),
+					fmt.Sprintf("lokt lock --wait %s  (auto-prunes expired locks)", name),
+				)
+			case staleResult.Stale && staleResult.Reason == stale.ReasonDeadPID:
+				reason.Type = "dead_pid"
+				reason.Message = fmt.Sprintf("Held by %s@%s (PID %d, dead) for %s", lf.Owner, lf.Host, lf.PID, age)
+				reason.HolderStaleReason = string(stale.ReasonDeadPID)
+				suggestions = append(suggestions,
+					fmt.Sprintf("lokt unlock --break-stale %s", name),
+					fmt.Sprintf("lokt lock --wait %s  (auto-prunes dead locks)", name),
+				)
+			case staleResult.Reason == stale.ReasonUnknown:
+				reason.Type = "held"
+				reason.Message = fmt.Sprintf("Held by %s@%s (PID %d) for %s — PID liveness cannot be verified (remote host)", lf.Owner, lf.Host, lf.PID, age)
+				reason.HolderStaleReason = string(stale.ReasonUnknown)
+				suggestions = append(suggestions,
+					fmt.Sprintf("lokt lock --wait %s", name),
+					fmt.Sprintf("lokt unlock --force %s  (break-glass)", name),
+				)
+			default:
+				// Held by another, same host, PID alive
+				reason.Type = "held"
+				reason.Message = fmt.Sprintf("Held by %s@%s (PID %d, %s) for %s", lf.Owner, lf.Host, lf.PID, pidStatus, age)
+				suggestions = append(suggestions,
+					fmt.Sprintf("lokt lock --wait %s", name),
+					fmt.Sprintf("lokt unlock --force %s  (break-glass)", name),
+				)
+			}
+			reasons = append(reasons, reason)
+		}
+	}
+
+	// Output
+	if *jsonOutput {
+		out := whyOutput{
+			Name:        name,
+			Status:      "blocked",
+			Reasons:     reasons,
+			Suggestions: suggestions,
+		}
+		if len(reasons) == 0 {
+			out.Status = "free"
+		}
+		if out.Reasons == nil {
+			out.Reasons = []whyReason{}
+		}
+		if out.Suggestions == nil {
+			out.Suggestions = []string{}
+		}
+		data, _ := json.MarshalIndent(out, "", "  ")
+		fmt.Println(string(data))
+	} else {
+		whyPrintText(name, reasons, suggestions)
+	}
+
+	if len(reasons) == 0 {
+		return ExitOK
+	}
+	return ExitLockHeld
+}
+
+func whyPrintText(name string, reasons []whyReason, suggestions []string) {
+	if len(reasons) == 0 {
+		fmt.Printf("Lock %q is FREE — acquisition would succeed.\n", name)
+		return
+	}
+
+	fmt.Printf("Lock %q is BLOCKED:\n", name)
+	for i := range reasons {
+		r := &reasons[i]
+		fmt.Println()
+		switch r.Type {
+		case "frozen":
+			fmt.Printf("  FROZEN by %s@%s\n", r.FreezeOwner, r.FreezeHost)
+			fmt.Printf("    Age:       %s\n", time.Duration(r.FreezeAgeSec)*time.Second)
+			fmt.Printf("    Remaining: %s\n", time.Duration(r.FreezeRemainingSec)*time.Second)
+		case "self_held":
+			fmt.Printf("  SELF-HELD (you already hold this lock)\n")
+			fmt.Printf("    Owner: %s@%s (PID %d)\n", r.HolderOwner, r.HolderHost, r.HolderPID)
+			fmt.Printf("    Age:   %s\n", time.Duration(r.HolderAgeSec)*time.Second)
+		case "corrupted":
+			fmt.Printf("  CORRUPTED lock file\n")
+			fmt.Printf("    Lock file contains invalid JSON\n")
+		default:
+			label := "HELD"
+			switch r.Type {
+			case "expired":
+				label = "EXPIRED"
+			case "dead_pid":
+				label = "STALE (dead PID)"
+			}
+			fmt.Printf("  %s by %s@%s (PID %d, %s)\n", label, r.HolderOwner, r.HolderHost, r.HolderPID, r.HolderPIDStatus)
+			fmt.Printf("    Age: %s\n", time.Duration(r.HolderAgeSec)*time.Second)
+			if r.HolderTTLSec > 0 {
+				ttl := time.Duration(r.HolderTTLSec) * time.Second
+				if r.HolderExpired {
+					fmt.Printf("    TTL: %s (expired)\n", ttl)
+				} else {
+					fmt.Printf("    TTL: %s (%s remaining)\n", ttl, time.Duration(r.HolderRemainSec)*time.Second)
+				}
+			}
+			if r.HolderStaleReason == string(stale.ReasonUnknown) {
+				fmt.Printf("    PID liveness cannot be verified (remote host)\n")
+			}
+		}
+	}
+
+	if len(suggestions) > 0 {
+		fmt.Println()
+		fmt.Println("Suggestions:")
+		for _, s := range suggestions {
+			fmt.Printf("  - %s\n", s)
+		}
+	}
+}
+
+// pidLivenessFromLock returns "alive", "dead", or "unknown" based on PID status.
+// Uses lockfile.Lock (from the lockfile package) instead of the local lockFile type.
+func pidLivenessFromLock(lf *lockfile.Lock) string {
+	hostname, err := os.Hostname()
+	if err != nil || hostname != lf.Host {
+		return "unknown"
+	}
+	if stale.IsProcessAlive(lf.PID) {
+		return "alive"
+	}
+	return "dead"
 }
 
 // doctorOutput is the JSON structure for doctor command output.
