@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/nikolasavic/lokt/internal/audit"
+	"github.com/nikolasavic/lokt/internal/demo"
 	"github.com/nikolasavic/lokt/internal/doctor"
 	"github.com/nikolasavic/lokt/internal/identity"
 	"github.com/nikolasavic/lokt/internal/lock"
@@ -70,6 +71,8 @@ func main() {
 		code = cmdDoctor(args)
 	case "why":
 		code = cmdWhy(args)
+	case "demo":
+		code = cmdDemo(args)
 	case "help", "-h", "--help":
 		usage()
 	default:
@@ -110,6 +113,7 @@ func usage() {
 	fmt.Println("    --name lock         Filter by lock name")
 	fmt.Println("  why <name>        Explain why a lock cannot be acquired")
 	fmt.Println("    --json          Output in JSON format")
+	fmt.Println("  demo mosaic       Run concurrency demo (colored tile mosaic)")
 	fmt.Println("  doctor            Validate lokt setup")
 	fmt.Println("    --json          Output in JSON format")
 	fmt.Println("  version           Show version info")
@@ -1074,6 +1078,247 @@ func tailAuditLog(ctx context.Context, path string, nameFilter string) int {
 			return ExitOK
 		case <-time.After(pollInterval):
 		}
+	}
+}
+
+// --- demo command ---
+
+func cmdDemo(args []string) int {
+	if len(args) < 1 {
+		fmt.Fprintln(os.Stderr, "usage: lokt demo mosaic [flags]")
+		return ExitUsage
+	}
+	sub := args[0]
+	switch sub {
+	case "mosaic":
+		return cmdDemoMosaic(args[1:])
+	default:
+		fmt.Fprintf(os.Stderr, "unknown demo: %s\n", sub)
+		fmt.Fprintln(os.Stderr, "usage: lokt demo mosaic [flags]")
+		return ExitUsage
+	}
+}
+
+func cmdDemoMosaic(args []string) int {
+	fs := flag.NewFlagSet("demo mosaic", flag.ExitOnError)
+	name := fs.String("name", "mosaic", "Lock name for the demo")
+	grid := fs.String("grid", "64x36", "Grid size (WxH)")
+	workers := fs.Int("workers", 512, "Number of worker goroutines")
+	ttl := fs.Int("ttl", 2, "Lock TTL in seconds")
+	wait := fs.Bool("wait", true, "Wait for lock to be free")
+	timeout := fs.Int("timeout", 2, "Wait timeout in seconds")
+	fps := fs.Int("fps", 20, "Render FPS")
+	tileDelay := fs.Int("tile-delay", 120, "Max jitter between tiles (ms)")
+	seed := fs.Uint64("seed", 1337, "Random seed")
+	mode := fs.String("mode", "lock", "Mode: lock or nolock")
+	_ = fs.Parse(args)
+
+	// Parse grid
+	var gx, gy int
+	if _, err := fmt.Sscanf(*grid, "%dx%d", &gx, &gy); err != nil || gx <= 0 || gy <= 0 {
+		fmt.Fprintf(os.Stderr, "error: invalid --grid %q (expected WxH, e.g. 64x36)\n", *grid)
+		return ExitUsage
+	}
+
+	if *mode != "lock" && *mode != "nolock" {
+		fmt.Fprintf(os.Stderr, "error: --mode must be 'lock' or 'nolock'\n")
+		return ExitUsage
+	}
+
+	cfg := &demo.MosaicConfig{
+		Name:      *name,
+		GridX:     gx,
+		GridY:     gy,
+		Workers:   *workers,
+		TTL:       *ttl,
+		Wait:      *wait,
+		Timeout:   *timeout,
+		FPS:       *fps,
+		TileDelay: *tileDelay,
+		Seed:      *seed,
+		Mode:      *mode,
+	}
+
+	rootDir, err := root.Find()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return ExitError
+	}
+
+	// Create demo directory
+	demoDir := filepath.Join(rootDir, "demo", cfg.Name)
+	if err := os.MkdirAll(demoDir, 0700); err != nil {
+		fmt.Fprintf(os.Stderr, "error: creating demo dir: %v\n", err)
+		return ExitError
+	}
+
+	// Ensure locks dir exists
+	if err := root.EnsureDirs(rootDir); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return ExitError
+	}
+
+	// Clean previous run
+	ledgerPath := filepath.Join(demoDir, "mosaic.ledger.jsonl")
+	statePath := filepath.Join(demoDir, "mosaic.next")
+	_ = os.Remove(ledgerPath)
+	_ = os.Remove(statePath)
+
+	// Create empty ledger file so renderer can open it
+	if f, err := os.Create(ledgerPath); err == nil {
+		_ = f.Close()
+	}
+
+	auditor := audit.NewWriter(rootDir)
+	ledger := demo.NewLedgerWriter(ledgerPath)
+
+	// Set up context with signal handling
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
+
+	// Clear screen
+	fmt.Print("\033[2J\033[H")
+
+	// Start renderer
+	renderer := demo.NewRenderer(cfg, ledgerPath, rootDir)
+	go renderer.Start(ctx)
+
+	// Start keyboard handler
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case key := <-renderer.Actions:
+				switch key {
+				case 'q':
+					renderer.AddEvent("quit requested")
+					cancel()
+				case 'f':
+					renderer.AddEvent("freezing...")
+					err := lock.Freeze(rootDir, cfg.Name, lock.FreezeOptions{
+						TTL:     10 * time.Second,
+						Auditor: auditor,
+					})
+					if err != nil {
+						renderer.AddEvent(fmt.Sprintf("freeze failed: %v", err))
+					} else {
+						renderer.AddEvent("FROZEN for 10s")
+					}
+				case 'u':
+					renderer.AddEvent("unfreezing...")
+					err := lock.Unfreeze(rootDir, cfg.Name, lock.UnfreezeOptions{
+						Force:   true,
+						Auditor: auditor,
+					})
+					if err != nil {
+						renderer.AddEvent(fmt.Sprintf("unfreeze failed: %v", err))
+					} else {
+						renderer.AddEvent("unfrozen")
+					}
+				case 'k':
+					renderer.AddEvent("killing holder...")
+					killCurrentHolder(rootDir, cfg.Name, renderer)
+				}
+			}
+		}
+	}()
+
+	// Start workers
+	coord := &demo.Coordinator{
+		Config:    cfg,
+		RootDir:   rootDir,
+		DemoDir:   demoDir,
+		Auditor:   auditor,
+		Ledger:    ledger,
+		StatePath: statePath,
+	}
+
+	start := time.Now()
+	errCount := coord.Start(ctx)
+	elapsed := time.Since(start)
+
+	// Give renderer time to catch up
+	time.Sleep(200 * time.Millisecond)
+	cancel()
+	// Brief pause for renderer to clean up
+	time.Sleep(100 * time.Millisecond)
+
+	// Restore terminal
+	fmt.Print("\033[?25h\033[0m")
+
+	// Run verifier
+	total := cfg.TotalTiles()
+	result, verifyErr := demo.VerifyLedger(ledgerPath, total)
+
+	fmt.Println()
+	fmt.Println("════════════════════════════════════════════════")
+	fmt.Println("  LOKT MOSAIC — Summary")
+	fmt.Println("════════════════════════════════════════════════")
+	fmt.Printf("  Grid:     %dx%d (%d tiles)\n", cfg.GridX, cfg.GridY, total)
+	fmt.Printf("  Workers:  %d\n", cfg.Workers)
+	fmt.Printf("  Mode:     %s\n", cfg.Mode)
+	fmt.Printf("  Duration: %s\n", elapsed.Truncate(time.Millisecond))
+	if elapsed.Seconds() > 0 {
+		fmt.Printf("  Rate:     %.1f tiles/sec\n", float64(total)/elapsed.Seconds())
+	}
+	if errCount > 0 {
+		fmt.Printf("  Errors:   %d workers reported errors\n", errCount)
+	}
+
+	fmt.Println()
+	if verifyErr != nil {
+		fmt.Printf("  Verify:   ERROR — %v\n", verifyErr)
+		fmt.Println("════════════════════════════════════════════════")
+		return ExitError
+	}
+
+	if result.OK {
+		fmt.Println("  Verify:   PASS")
+		fmt.Printf("  Entries:  %d/%d\n", result.EntryCount, result.ExpectedCount)
+		fmt.Println("  Chain:    intact")
+		fmt.Println("════════════════════════════════════════════════")
+		return ExitOK
+	}
+
+	fmt.Println("  Verify:   FAIL")
+	fmt.Printf("  Entries:  %d/%d\n", result.EntryCount, result.ExpectedCount)
+	for _, f := range result.Failures {
+		fmt.Printf("  - %s\n", f)
+	}
+	fmt.Println("════════════════════════════════════════════════")
+	return ExitError
+}
+
+func killCurrentHolder(rootDir, name string, renderer *demo.Renderer) {
+	path := root.LockFilePath(rootDir, name)
+	lf, err := readLockFile(path)
+	if err != nil {
+		renderer.AddEvent("no holder found")
+		return
+	}
+
+	hostname, _ := os.Hostname()
+	if hostname != lf.Host {
+		renderer.AddEvent(fmt.Sprintf("holder on different host: %s", lf.Host))
+		return
+	}
+
+	proc, err := os.FindProcess(lf.PID)
+	if err != nil {
+		renderer.AddEvent(fmt.Sprintf("process %d not found", lf.PID))
+		return
+	}
+
+	// For in-process goroutines, SIGKILL won't work (same process).
+	// Instead, force-break the lock so workers can proceed.
+	_ = proc.Signal(syscall.Signal(0)) // check if alive
+	renderer.AddEvent(fmt.Sprintf("force-breaking lock (holder pid %d)", lf.PID))
+	err = lock.Release(rootDir, name, lock.ReleaseOptions{Force: true})
+	if err != nil {
+		renderer.AddEvent(fmt.Sprintf("force-break failed: %v", err))
+	} else {
+		renderer.AddEvent("lock force-broken")
 	}
 }
 
