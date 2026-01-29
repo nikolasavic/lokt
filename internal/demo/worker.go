@@ -54,20 +54,12 @@ func (w *Worker) Run(ctx context.Context) error {
 
 		// Acquire lock (with wait if configured)
 		var acqErr error
-		if w.Config.Mode == "nolock" {
+		switch {
+		case w.Config.Mode == "nolock":
 			// Skip locking entirely in nolock mode
-		} else if w.Config.Wait {
-			acqCtx := ctx
-			if w.Config.Timeout > 0 {
-				var cancel context.CancelFunc
-				acqCtx, cancel = context.WithTimeout(ctx, time.Duration(w.Config.Timeout)*time.Second)
-				defer cancel()
-			}
-			acqErr = lock.AcquireWithWait(acqCtx, w.RootDir, lockName, lock.AcquireOptions{
-				TTL:     time.Duration(w.Config.TTL) * time.Second,
-				Auditor: w.Auditor,
-			})
-		} else {
+		case w.Config.Wait:
+			acqErr = w.acquireWithWait(ctx, lockName)
+		default:
 			acqErr = lock.Acquire(w.RootDir, lockName, lock.AcquireOptions{
 				TTL:     time.Duration(w.Config.TTL) * time.Second,
 				Auditor: w.Auditor,
@@ -126,6 +118,19 @@ func (w *Worker) Run(ctx context.Context) error {
 		// Release lock
 		w.releaseLock(lockName)
 	}
+}
+
+func (w *Worker) acquireWithWait(ctx context.Context, lockName string) error {
+	acqCtx := ctx
+	if w.Config.Timeout > 0 {
+		var cancel context.CancelFunc
+		acqCtx, cancel = context.WithTimeout(ctx, time.Duration(w.Config.Timeout)*time.Second)
+		defer cancel()
+	}
+	return lock.AcquireWithWait(acqCtx, w.RootDir, lockName, lock.AcquireOptions{
+		TTL:     time.Duration(w.Config.TTL) * time.Second,
+		Auditor: w.Auditor,
+	})
 }
 
 func (w *Worker) releaseLock(name string) {

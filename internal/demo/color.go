@@ -4,7 +4,7 @@ package demo
 // TileColor computes a deterministic RGB color for tile index i with the given seed.
 // Uses splitmix64 to produce well-distributed colors.
 func TileColor(i int, seed uint64) [3]byte {
-	h := splitmix64(seed ^ uint64(i))
+	h := splitmix64(seed ^ uint64(i)) //nolint:gosec // G115: index is always non-negative
 	r := byte(h)
 	g := byte(h >> 8)
 	b := byte(h >> 16)

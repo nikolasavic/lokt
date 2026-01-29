@@ -135,7 +135,7 @@ func TestVerifyLedger_BrokenChain(t *testing.T) {
 func TestVerifyLedger_EmptyFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.ledger.jsonl")
-	if err := os.WriteFile(path, nil, 0644); err != nil {
+	if err := os.WriteFile(path, nil, 0600); err != nil {
 		t.Fatal(err)
 	}
 
