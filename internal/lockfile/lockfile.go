@@ -18,6 +18,7 @@ type Lock struct {
 	Owner      string    `json:"owner"`
 	Host       string    `json:"host"`
 	PID        int       `json:"pid"`
+	PIDStartNS int64     `json:"pid_start_ns,omitempty"`
 	AcquiredAt time.Time `json:"acquired_ts"`
 	TTLSec     int       `json:"ttl_sec,omitempty"`
 }

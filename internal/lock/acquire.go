@@ -63,6 +63,9 @@ func Acquire(rootDir, name string, opts AcquireOptions) error {
 		PID:        id.PID,
 		AcquiredAt: time.Now(),
 	}
+	if startNS, err := stale.GetProcessStartTime(id.PID); err == nil {
+		lock.PIDStartNS = startNS
+	}
 	if opts.TTL > 0 {
 		lock.TTLSec = int(opts.TTL.Seconds())
 	}

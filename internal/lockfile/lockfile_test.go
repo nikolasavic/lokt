@@ -1,6 +1,7 @@
 package lockfile
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -203,5 +204,95 @@ func TestValidateName(t *testing.T) {
 				t.Errorf("ValidateName(%q) error should wrap ErrInvalidName, got %v", tt.input, err)
 			}
 		})
+	}
+}
+
+func TestWriteAndRead_PIDStartNS(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.lock")
+
+	lock := &Lock{
+		Name:       "test",
+		Owner:      "testuser",
+		Host:       "testhost",
+		PID:        12345,
+		PIDStartNS: 1706400000000000000, // example nanosecond timestamp
+		AcquiredAt: time.Now().Truncate(time.Millisecond),
+		TTLSec:     300,
+	}
+
+	if err := Write(path, lock); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+
+	got, err := Read(path)
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+
+	if got.PIDStartNS != lock.PIDStartNS {
+		t.Errorf("PIDStartNS = %d, want %d", got.PIDStartNS, lock.PIDStartNS)
+	}
+}
+
+func TestRead_BackwardCompat_NoPIDStartNS(t *testing.T) {
+	// Simulate an old lock file without pid_start_ns field.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "old.lock")
+
+	oldJSON := `{
+  "name": "test",
+  "owner": "testuser",
+  "host": "testhost",
+  "pid": 12345,
+  "acquired_ts": "2026-01-28T10:00:00Z",
+  "ttl_sec": 300
+}`
+	if err := os.WriteFile(path, []byte(oldJSON), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := Read(path)
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+
+	if got.PIDStartNS != 0 {
+		t.Errorf("PIDStartNS should be 0 for old lock, got %d", got.PIDStartNS)
+	}
+	if got.Name != "test" {
+		t.Errorf("Name = %q, want %q", got.Name, "test")
+	}
+}
+
+func TestWriteOmitsPIDStartNS_WhenZero(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "nopid.lock")
+
+	lock := &Lock{
+		Name:       "test",
+		Owner:      "testuser",
+		Host:       "testhost",
+		PID:        12345,
+		PIDStartNS: 0, // zero — should be omitted from JSON
+		AcquiredAt: time.Now().Truncate(time.Millisecond),
+	}
+
+	if err := Write(path, lock); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+
+	if _, exists := raw["pid_start_ns"]; exists {
+		t.Error("pid_start_ns should be omitted when zero (omitempty)")
 	}
 }

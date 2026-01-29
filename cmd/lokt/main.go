@@ -675,6 +675,7 @@ type lockFile struct {
 	Owner      string    `json:"owner"`
 	Host       string    `json:"host"`
 	PID        int       `json:"pid"`
+	PIDStartNS int64     `json:"pid_start_ns,omitempty"`
 	AcquiredAt time.Time `json:"acquired_ts"`
 	TTLSec     int       `json:"ttl_sec,omitempty"`
 }
@@ -685,6 +686,7 @@ type statusOutput struct {
 	Owner      string `json:"owner"`
 	Host       string `json:"host"`
 	PID        int    `json:"pid"`
+	PIDStartNS int64  `json:"pid_start_ns,omitempty"`
 	AcquiredAt string `json:"acquired_ts"`
 	TTLSec     int    `json:"ttl_sec,omitempty"`
 	AgeSec     int    `json:"age_sec"`
@@ -699,6 +701,7 @@ func lockToStatusOutput(lf *lockFile) statusOutput {
 		Owner:      lf.Owner,
 		Host:       lf.Host,
 		PID:        lf.PID,
+		PIDStartNS: lf.PIDStartNS,
 		AcquiredAt: lf.AcquiredAt.Format(time.RFC3339),
 		TTLSec:     lf.TTLSec,
 		AgeSec:     int(time.Since(lf.AcquiredAt).Seconds()),

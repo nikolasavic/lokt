@@ -10,6 +10,7 @@ import (
 	"github.com/nikolasavic/lokt/internal/identity"
 	"github.com/nikolasavic/lokt/internal/lockfile"
 	"github.com/nikolasavic/lokt/internal/root"
+	"github.com/nikolasavic/lokt/internal/stale"
 )
 
 // FreezePrefix is prepended to the lock name for freeze locks.
@@ -73,6 +74,9 @@ func Freeze(rootDir, name string, opts FreezeOptions) error {
 		PID:        id.PID,
 		AcquiredAt: time.Now(),
 		TTLSec:     int(opts.TTL.Seconds()),
+	}
+	if startNS, err := stale.GetProcessStartTime(id.PID); err == nil {
+		lock.PIDStartNS = startNS
 	}
 
 	// Atomic create

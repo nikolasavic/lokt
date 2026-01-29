@@ -48,5 +48,16 @@ func Check(lock *lockfile.Lock) Result {
 		return Result{Stale: true, Reason: ReasonDeadPID}
 	}
 
+	// PID is alive — check for PID recycling via start time comparison.
+	// If the lock recorded a start time and the current process at that PID
+	// has a different start time, the original holder is dead (PID recycled).
+	if lock.PIDStartNS != 0 {
+		currentStart, err := GetProcessStartTime(lock.PID)
+		if err == nil && currentStart != lock.PIDStartNS {
+			return Result{Stale: true, Reason: ReasonDeadPID}
+		}
+		// err != nil → can't verify start time, fall through conservatively
+	}
+
 	return Result{Stale: false, Reason: ReasonNotStale}
 }
