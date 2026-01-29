@@ -121,5 +121,20 @@ func Write(path string, lock *Lock) error {
 		return err
 	}
 
-	return os.Rename(tmpPath, path)
+	if err := os.Rename(tmpPath, path); err != nil {
+		return err
+	}
+	return SyncDir(path)
+}
+
+// SyncDir fsyncs the parent directory of the given path to ensure
+// the directory entry (create, rename, or delete) is durably persisted.
+// Without this, a power loss could leave ghost or phantom entries.
+func SyncDir(path string) error {
+	dir, err := os.Open(filepath.Dir(path))
+	if err != nil {
+		return err
+	}
+	defer dir.Close()
+	return dir.Sync()
 }

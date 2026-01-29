@@ -83,6 +83,7 @@ func Freeze(rootDir, name string, opts FreezeOptions) error {
 			if readErr != nil {
 				if errors.Is(readErr, lockfile.ErrCorrupted) {
 					if removeErr := os.Remove(path); removeErr == nil {
+						_ = lockfile.SyncDir(path)
 						f2, retryErr := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
 						if retryErr == nil {
 							_ = f2.Close()
@@ -96,6 +97,7 @@ func Freeze(rootDir, name string, opts FreezeOptions) error {
 			// If existing freeze is expired, remove and retry
 			if existing.IsExpired() {
 				if removeErr := os.Remove(path); removeErr == nil {
+					_ = lockfile.SyncDir(path)
 					f2, retryErr := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
 					if retryErr == nil {
 						_ = f2.Close()
@@ -113,6 +115,7 @@ func Freeze(rootDir, name string, opts FreezeOptions) error {
 writeLock:
 	if err := lockfile.Write(path, lock); err != nil {
 		_ = os.Remove(path)
+		_ = lockfile.SyncDir(path)
 		return fmt.Errorf("write freeze file: %w", err)
 	}
 
@@ -150,6 +153,7 @@ func Unfreeze(rootDir, name string, opts UnfreezeOptions) error {
 					}
 					return fmt.Errorf("remove corrupted freeze: %w", removeErr)
 				}
+				_ = lockfile.SyncDir(path)
 				return nil
 			}
 			return fmt.Errorf("freeze %q has corrupted data: %w", name, err)
@@ -169,6 +173,9 @@ func Unfreeze(rootDir, name string, opts UnfreezeOptions) error {
 			return ErrNotFound
 		}
 		return fmt.Errorf("remove freeze: %w", err)
+	}
+	if err := lockfile.SyncDir(path); err != nil {
+		return fmt.Errorf("sync directory: %w", err)
 	}
 
 	emitUnfreezeEvent(opts.Auditor, existing, opts.Force)
@@ -191,6 +198,7 @@ func CheckFreeze(rootDir, name string, auditor *audit.Writer) error {
 		if errors.Is(err, lockfile.ErrCorrupted) {
 			// Corrupted freeze file — remove it
 			_ = os.Remove(path)
+			_ = lockfile.SyncDir(path)
 			return nil
 		}
 		return nil // Can't read, assume no freeze
@@ -201,6 +209,7 @@ func CheckFreeze(rootDir, name string, auditor *audit.Writer) error {
 	// because the freeze command exits immediately after creating the lock.
 	if existing.IsExpired() {
 		_ = os.Remove(path)
+		_ = lockfile.SyncDir(path)
 		return nil
 	}
 

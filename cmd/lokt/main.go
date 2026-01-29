@@ -17,6 +17,7 @@ import (
 	"github.com/nikolasavic/lokt/internal/audit"
 	"github.com/nikolasavic/lokt/internal/doctor"
 	"github.com/nikolasavic/lokt/internal/lock"
+	"github.com/nikolasavic/lokt/internal/lockfile"
 	"github.com/nikolasavic/lokt/internal/root"
 	"github.com/nikolasavic/lokt/internal/stale"
 )
@@ -619,6 +620,7 @@ func showLockWithPrune(rootDir, name string, jsonOutput bool) int {
 			fmt.Fprintf(os.Stderr, "error removing lock: %v\n", err)
 			return ExitError
 		}
+		_ = lockfile.SyncDir(path)
 		if !jsonOutput {
 			fmt.Printf("pruned expired lock %q\n", name)
 		}
@@ -644,6 +646,7 @@ func pruneLockIfExpired(rootDir, name string) bool {
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		return false
 	}
+	_ = lockfile.SyncDir(path)
 
 	fmt.Printf("pruned: %s (expired)\n", name)
 	return true

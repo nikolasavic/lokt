@@ -88,6 +88,7 @@ func Release(rootDir, name string, opts ReleaseOptions) error {
 					}
 					return fmt.Errorf("remove corrupted lock: %w", removeErr)
 				}
+				_ = lockfile.SyncDir(path)
 				emitCorruptBreakReleaseEvent(opts.Auditor, name)
 				return nil
 			}
@@ -120,6 +121,9 @@ func Release(rootDir, name string, opts ReleaseOptions) error {
 			return ErrNotFound
 		}
 		return fmt.Errorf("remove lock: %w", err)
+	}
+	if err := lockfile.SyncDir(path); err != nil {
+		return fmt.Errorf("sync directory: %w", err)
 	}
 
 	// Emit release event

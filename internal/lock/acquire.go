@@ -77,6 +77,7 @@ func Acquire(rootDir, name string, opts AcquireOptions) error {
 				if errors.Is(readErr, lockfile.ErrCorrupted) {
 					// Corrupted lock file — no valid holder, safe to remove
 					if removeErr := os.Remove(path); removeErr == nil {
+						_ = lockfile.SyncDir(path)
 						emitCorruptBreakEvent(opts.Auditor, id, name)
 
 						// Retry acquisition once
@@ -97,6 +98,7 @@ func Acquire(rootDir, name string, opts AcquireOptions) error {
 			result := stale.Check(existing)
 			if result.Stale && result.Reason == stale.ReasonDeadPID {
 				if removeErr := os.Remove(path); removeErr == nil {
+					_ = lockfile.SyncDir(path)
 					// Emit auto-prune event with previous holder info
 					emitAutoPruneEvent(opts.Auditor, id, name, existing)
 
@@ -128,7 +130,8 @@ func Acquire(rootDir, name string, opts AcquireOptions) error {
 writeLock:
 	// Write lock data atomically (replaces the empty file)
 	if err := lockfile.Write(path, lock); err != nil {
-		_ = os.Remove(path) // Clean up on failure
+		_ = os.Remove(path)
+		_ = lockfile.SyncDir(path)
 		return fmt.Errorf("write lock file: %w", err)
 	}
 
@@ -214,7 +217,11 @@ func tryBreakStale(rootDir, name string) bool {
 	if err != nil {
 		// Corrupted lock file is unconditionally stale — remove it
 		if errors.Is(err, lockfile.ErrCorrupted) {
-			return os.Remove(path) == nil
+			if os.Remove(path) != nil {
+				return false
+			}
+			_ = lockfile.SyncDir(path)
+			return true
 		}
 		return false
 	}
@@ -228,6 +235,7 @@ func tryBreakStale(rootDir, name string) bool {
 	if err := os.Remove(path); err != nil {
 		return false
 	}
+	_ = lockfile.SyncDir(path)
 	return true
 }
 
