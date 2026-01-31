@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/nikolasavic/lokt/internal/audit"
 	"github.com/nikolasavic/lokt/internal/identity"
@@ -130,6 +131,61 @@ func Release(rootDir, name string, opts ReleaseOptions) error {
 	emitReleaseEvent(opts.Auditor, existing, opts)
 
 	return nil
+}
+
+// ReleaseByOwner releases all locks owned by the given owner.
+// Returns the names of locks that were released.
+// Locks that are unreadable, corrupted, or owned by a different owner are skipped.
+// Returns an empty slice (not an error) if no locks match or the locks directory doesn't exist.
+func ReleaseByOwner(rootDir, owner string, opts ReleaseOptions) ([]string, error) {
+	locksDir := root.LocksPath(rootDir)
+	entries, err := os.ReadDir(locksDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read locks directory: %w", err)
+	}
+
+	var released []string
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if !strings.HasSuffix(name, ".json") {
+			continue
+		}
+		lockName := name[:len(name)-5]
+
+		path := root.LockFilePath(rootDir, lockName)
+		lf, err := lockfile.Read(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue // removed by another process
+			}
+			fmt.Fprintf(os.Stderr, "warning: skipping unreadable lock %q: %v\n", lockName, err)
+			continue
+		}
+
+		if lf.Owner != owner {
+			continue
+		}
+
+		if err := os.Remove(path); err != nil {
+			if os.IsNotExist(err) {
+				continue // removed by another process
+			}
+			fmt.Fprintf(os.Stderr, "warning: failed to remove lock %q: %v\n", lockName, err)
+			continue
+		}
+		_ = lockfile.SyncDir(path)
+
+		emitReleaseEvent(opts.Auditor, lf, opts)
+		released = append(released, lockName)
+	}
+
+	return released, nil
 }
 
 // emitCorruptBreakReleaseEvent emits a corrupt-break audit event during release. Safe to call with nil auditor.
