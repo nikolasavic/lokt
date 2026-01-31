@@ -70,6 +70,8 @@ func main() {
 		code = cmdDoctor(args)
 	case "why":
 		code = cmdWhy(args)
+	case "demo":
+		code = cmdDemo(args)
 	case "help", "-h", "--help":
 		usage()
 	default:
@@ -116,6 +118,7 @@ func usage() {
 	fmt.Println("    --json          Output in JSON format")
 	fmt.Println("  doctor            Validate lokt setup")
 	fmt.Println("    --json          Output in JSON format")
+	fmt.Println("  demo              Generate hexwall demo script")
 	fmt.Println("  version           Show version info")
 	fmt.Println()
 	fmt.Println("Exit codes:")
