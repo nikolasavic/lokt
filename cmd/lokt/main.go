@@ -90,6 +90,7 @@ func usage() {
 	fmt.Println("    --ttl duration      Lock TTL (e.g., 5m, 1h)")
 	fmt.Println("    --wait              Wait for lock to be free")
 	fmt.Println("    --timeout duration  Maximum wait time (requires --wait)")
+	fmt.Println("    --json              Output JSON on acquire or deny")
 	fmt.Println("  unlock <name>     Release a lock")
 	fmt.Println("    --force         Remove without ownership check (break-glass)")
 	fmt.Println("    --break-stale   Remove only if stale (expired TTL or dead PID)")
@@ -127,10 +128,11 @@ func cmdLock(args []string) int {
 	ttl := fs.Duration("ttl", 0, "Lock TTL (e.g., 5m, 1h)")
 	wait := fs.Bool("wait", false, "Wait for lock to be free")
 	timeout := fs.Duration("timeout", 0, "Maximum time to wait (requires --wait)")
+	jsonOutput := fs.Bool("json", false, "Output JSON on acquire or deny")
 	_ = fs.Parse(args)
 
 	if fs.NArg() < 1 {
-		fmt.Fprintln(os.Stderr, "usage: lokt lock [--ttl duration] [--wait] [--timeout duration] <name>")
+		fmt.Fprintln(os.Stderr, "usage: lokt lock [--ttl duration] [--wait] [--timeout duration] [--json] <name>")
 		return ExitUsage
 	}
 	name := fs.Arg(0)
@@ -178,17 +180,29 @@ func cmdLock(args []string) int {
 				// Timeout - try to get current holder info
 				path := root.LockFilePath(rootDir, name)
 				if lf, readErr := readLockFile(path); readErr == nil {
-					age := time.Since(lf.AcquiredAt).Truncate(time.Second)
-					fmt.Fprintf(os.Stderr, "error: timeout waiting for lock %q held by %s@%s (pid %d) for %s\n",
-						name, lf.Owner, lf.Host, lf.PID, age)
+					if *jsonOutput {
+						printLockDenyJSON(name, lf)
+					} else {
+						age := time.Since(lf.AcquiredAt).Truncate(time.Second)
+						fmt.Fprintf(os.Stderr, "error: timeout waiting for lock %q held by %s@%s (pid %d) for %s\n",
+							name, lf.Owner, lf.Host, lf.PID, age)
+					}
 				} else {
-					fmt.Fprintf(os.Stderr, "error: timeout waiting for lock %q\n", name)
+					if *jsonOutput {
+						printLockDenyJSON(name, nil)
+					} else {
+						fmt.Fprintf(os.Stderr, "error: timeout waiting for lock %q\n", name)
+					}
 				}
 				return ExitLockHeld
 			}
 			var held *lock.HeldError
 			if errors.As(err, &held) {
-				fmt.Fprintf(os.Stderr, "error: %v\n", held)
+				if *jsonOutput {
+					printLockDenyJSONFromLock(held.Lock)
+				} else {
+					fmt.Fprintf(os.Stderr, "error: %v\n", held)
+				}
 				return ExitLockHeld
 			}
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -199,7 +213,11 @@ func cmdLock(args []string) int {
 		if err != nil {
 			var held *lock.HeldError
 			if errors.As(err, &held) {
-				fmt.Fprintf(os.Stderr, "error: %v\n", held)
+				if *jsonOutput {
+					printLockDenyJSONFromLock(held.Lock)
+				} else {
+					fmt.Fprintf(os.Stderr, "error: %v\n", held)
+				}
 				return ExitLockHeld
 			}
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -207,8 +225,96 @@ func cmdLock(args []string) int {
 		}
 	}
 
-	fmt.Printf("acquired lock %q\n", name)
+	if *jsonOutput {
+		printLockAcquireJSON(name)
+	} else {
+		fmt.Printf("acquired lock %q\n", name)
+	}
 	return ExitOK
+}
+
+// lockDenyOutput is the JSON structure for lock --json deny output.
+type lockDenyOutput struct {
+	Status           string `json:"status"`
+	Name             string `json:"name"`
+	HolderOwner      string `json:"holder_owner,omitempty"`
+	HolderHost       string `json:"holder_host,omitempty"`
+	HolderPID        int    `json:"holder_pid,omitempty"`
+	HolderAgeSec     int    `json:"holder_age_sec,omitempty"`
+	HolderTTLSec     int    `json:"holder_ttl_sec,omitempty"`
+	HolderRemainSec  int    `json:"holder_remaining_sec,omitempty"`
+	HolderExpired    bool   `json:"holder_expired,omitempty"`
+	HolderPIDStatus  string `json:"holder_pid_status,omitempty"`
+	HolderAcquiredTS string `json:"holder_acquired_ts,omitempty"`
+}
+
+// lockAcquireOutput is the JSON structure for lock --json success output.
+type lockAcquireOutput struct {
+	Status string `json:"status"`
+	Name   string `json:"name"`
+}
+
+// printLockDenyJSONFromLock prints deny JSON from a lockfile.Lock (from HeldError).
+func printLockDenyJSONFromLock(lk *lockfile.Lock) {
+	out := lockDenyOutput{
+		Status: "blocked",
+		Name:   lk.Name,
+	}
+	if lk.Owner != "" {
+		out.HolderOwner = lk.Owner
+		out.HolderHost = lk.Host
+		out.HolderPID = lk.PID
+		out.HolderAcquiredTS = lk.AcquiredAt.Format(time.RFC3339)
+		out.HolderAgeSec = int(time.Since(lk.AcquiredAt).Seconds())
+		out.HolderExpired = lk.IsExpired()
+		if lk.TTLSec > 0 {
+			out.HolderTTLSec = lk.TTLSec
+			remain := time.Duration(lk.TTLSec)*time.Second - time.Since(lk.AcquiredAt)
+			if remain > 0 {
+				out.HolderRemainSec = int(remain.Seconds())
+			}
+		}
+		out.HolderPIDStatus = pidLivenessFromLock(lk)
+	}
+	data, _ := json.MarshalIndent(out, "", "  ")
+	fmt.Println(string(data))
+}
+
+// printLockDenyJSON prints deny JSON from a local lockFile (used in timeout path).
+func printLockDenyJSON(name string, lf *lockFile) {
+	if lf == nil {
+		out := lockDenyOutput{Status: "blocked", Name: name}
+		data, _ := json.MarshalIndent(out, "", "  ")
+		fmt.Println(string(data))
+		return
+	}
+	out := lockDenyOutput{
+		Status:           "blocked",
+		Name:             name,
+		HolderOwner:      lf.Owner,
+		HolderHost:       lf.Host,
+		HolderPID:        lf.PID,
+		HolderAcquiredTS: lf.AcquiredAt.Format(time.RFC3339),
+		HolderAgeSec:     int(time.Since(lf.AcquiredAt).Seconds()),
+		HolderExpired:    lf.IsExpired(),
+	}
+	if lf.TTLSec > 0 {
+		out.HolderTTLSec = lf.TTLSec
+		remain := time.Duration(lf.TTLSec)*time.Second - time.Since(lf.AcquiredAt)
+		if remain > 0 {
+			out.HolderRemainSec = int(remain.Seconds())
+		}
+	}
+	out.HolderPIDStatus = pidLiveness(lf)
+	data, _ := json.MarshalIndent(out, "", "  ")
+	fmt.Println(string(data))
+}
+
+// printLockAcquireJSON prints success JSON for lock --json.
+func printLockAcquireJSON(name string) {
+	out := lockAcquireOutput{Status: "acquired", Name: name}
+	data, _ := json.MarshalIndent(out, "", "  ")
+	fmt.Println(string(data))
 }
 
 func cmdUnlock(args []string) int {
