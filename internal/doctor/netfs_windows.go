@@ -3,20 +3,17 @@
 package doctor
 
 // CheckNetworkFS checks if the given path is on a network filesystem.
-// On Windows, we would need to use GetDriveType or similar APIs.
-// For now, return OK with a note that detection is limited.
-func CheckNetworkFS(path string) CheckResult {
-	result := CheckResult{Name: "network_fs"}
-
-	// TODO: Implement Windows network drive detection using GetDriveType
-	// For now, we cannot reliably detect network filesystems on Windows
-	result.Status = StatusOK
-	result.Message = "network filesystem detection not available on Windows"
-	return result
+// On Windows, detection is not yet implemented.
+func CheckNetworkFS(_ string) CheckResult {
+	return CheckResult{
+		Name:    "network_fs",
+		Status:  StatusOK,
+		Message: "network filesystem detection not available on Windows",
+	}
 }
 
 // GetFSTypeName returns a human-readable filesystem type name.
 // On Windows, detection is limited.
-func GetFSTypeName(path string) string {
+func GetFSTypeName(_ string) string {
 	return "unknown"
 }

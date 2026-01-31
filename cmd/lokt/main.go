@@ -19,6 +19,7 @@ import (
 	"github.com/nikolasavic/lokt/internal/identity"
 	"github.com/nikolasavic/lokt/internal/lock"
 	"github.com/nikolasavic/lokt/internal/lockfile"
+	"github.com/nikolasavic/lokt/internal/netfs"
 	"github.com/nikolasavic/lokt/internal/root"
 	"github.com/nikolasavic/lokt/internal/stale"
 )
@@ -129,6 +130,18 @@ func usage() {
 	fmt.Println("  4  Not lock owner")
 }
 
+// warnNetworkFS prints a warning to stderr if rootDir is on a network filesystem.
+// Set LOKT_ALLOW_NETFS=1 to suppress the warning.
+func warnNetworkFS(rootDir string) {
+	if os.Getenv("LOKT_ALLOW_NETFS") != "" {
+		return
+	}
+	if network, fsName := netfs.Check(rootDir); network {
+		fmt.Fprintf(os.Stderr, "warning: lock root is on a %s filesystem; atomic O_EXCL may not be reliable\n", fsName)
+		fmt.Fprintln(os.Stderr, "  Set LOKT_ALLOW_NETFS=1 to suppress this warning")
+	}
+}
+
 func cmdLock(args []string) int {
 	fs := flag.NewFlagSet("lock", flag.ExitOnError)
 	ttl := fs.Duration("ttl", 0, "Lock TTL (e.g., 5m, 1h)")
@@ -163,6 +176,7 @@ func cmdLock(args []string) int {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return ExitError
 	}
+	warnNetworkFS(rootDir)
 
 	auditor := audit.NewWriter(rootDir)
 	opts := lock.AcquireOptions{TTL: *ttl, Auditor: auditor}
@@ -588,6 +602,7 @@ func cmdGuard(args []string) int {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return ExitError
 	}
+	warnNetworkFS(rootDir)
 
 	auditor := audit.NewWriter(rootDir)
 
@@ -950,6 +965,7 @@ func cmdFreeze(args []string) int {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return ExitError
 	}
+	warnNetworkFS(rootDir)
 
 	auditor := audit.NewWriter(rootDir)
 	err = lock.Freeze(rootDir, name, lock.FreezeOptions{TTL: *ttl, Auditor: auditor})
