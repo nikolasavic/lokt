@@ -1,10 +1,8 @@
 package main
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,60 +12,10 @@ import (
 	"github.com/nikolasavic/lokt/internal/lockfile"
 )
 
-// setupWhyTest creates a temp lokt root and sets LOKT_ROOT.
-// Returns (rootDir, locksDir, cleanup).
-func setupWhyTest(t *testing.T) (string, string) {
-	t.Helper()
-	dir := t.TempDir()
-	locksDir := filepath.Join(dir, "locks")
-	if err := os.MkdirAll(locksDir, 0700); err != nil {
-		t.Fatalf("mkdir locks: %v", err)
-	}
-	t.Setenv("LOKT_ROOT", dir)
-	return dir, locksDir
-}
-
-// writeLockJSON writes a lockfile.Lock as JSON to the locks dir.
-func writeLockJSON(t *testing.T, locksDir, filename string, lk *lockfile.Lock) {
-	t.Helper()
-	data, err := json.MarshalIndent(lk, "", "  ")
-	if err != nil {
-		t.Fatalf("marshal lock: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(locksDir, filename), data, 0600); err != nil {
-		t.Fatalf("write lock file: %v", err)
-	}
-}
-
-// captureWhy runs cmdWhy with the given args, capturing stdout and stderr.
-// Returns (stdout, stderr, exitCode).
-func captureWhy(args []string) (string, string, int) {
-	oldStdout := os.Stdout
-	oldStderr := os.Stderr
-
-	rOut, wOut, _ := os.Pipe()
-	rErr, wErr, _ := os.Pipe()
-	os.Stdout = wOut
-	os.Stderr = wErr
-
-	code := cmdWhy(args)
-
-	_ = wOut.Close()
-	_ = wErr.Close()
-	os.Stdout = oldStdout
-	os.Stderr = oldStderr
-
-	var outBuf, errBuf bytes.Buffer
-	_, _ = io.Copy(&outBuf, rOut)
-	_, _ = io.Copy(&errBuf, rErr)
-
-	return outBuf.String(), errBuf.String(), code
-}
-
 func TestWhy_FreeLock(t *testing.T) {
-	setupWhyTest(t)
+	setupTestRoot(t)
 
-	stdout, _, code := captureWhy([]string{"nonexistent"})
+	stdout, _, code := captureCmd(cmdWhy, []string{"nonexistent"})
 	if code != ExitOK {
 		t.Errorf("expected exit %d, got %d", ExitOK, code)
 	}
@@ -77,9 +25,9 @@ func TestWhy_FreeLock(t *testing.T) {
 }
 
 func TestWhy_FreeLock_JSON(t *testing.T) {
-	setupWhyTest(t)
+	setupTestRoot(t)
 
-	stdout, _, code := captureWhy([]string{"--json", "nonexistent"})
+	stdout, _, code := captureCmd(cmdWhy, []string{"--json", "nonexistent"})
 	if code != ExitOK {
 		t.Errorf("expected exit %d, got %d", ExitOK, code)
 	}
@@ -97,7 +45,7 @@ func TestWhy_FreeLock_JSON(t *testing.T) {
 }
 
 func TestWhy_HeldByOther_SameHost_Alive(t *testing.T) {
-	_, locksDir := setupWhyTest(t)
+	_, locksDir := setupTestRoot(t)
 
 	// Use current PID + 1 million to simulate another alive process on same host.
 	// We use PID 1 which is always alive (launchd/init).
@@ -111,7 +59,7 @@ func TestWhy_HeldByOther_SameHost_Alive(t *testing.T) {
 		TTLSec:     300,
 	})
 
-	stdout, _, code := captureWhy([]string{"build"})
+	stdout, _, code := captureCmd(cmdWhy, []string{"build"})
 	if code != ExitLockHeld {
 		t.Errorf("expected exit %d, got %d", ExitLockHeld, code)
 	}
@@ -130,7 +78,7 @@ func TestWhy_HeldByOther_SameHost_Alive(t *testing.T) {
 }
 
 func TestWhy_HeldByOther_CrossHost(t *testing.T) {
-	_, locksDir := setupWhyTest(t)
+	_, locksDir := setupTestRoot(t)
 
 	writeLockJSON(t, locksDir, "deploy.json", &lockfile.Lock{
 		Name:       "deploy",
@@ -141,7 +89,7 @@ func TestWhy_HeldByOther_CrossHost(t *testing.T) {
 		TTLSec:     600,
 	})
 
-	stdout, _, code := captureWhy([]string{"deploy"})
+	stdout, _, code := captureCmd(cmdWhy, []string{"deploy"})
 	if code != ExitLockHeld {
 		t.Errorf("expected exit %d, got %d", ExitLockHeld, code)
 	}
@@ -154,7 +102,7 @@ func TestWhy_HeldByOther_CrossHost(t *testing.T) {
 }
 
 func TestWhy_Frozen(t *testing.T) {
-	_, locksDir := setupWhyTest(t)
+	_, locksDir := setupTestRoot(t)
 
 	// Create freeze lock (freeze-<name>.json)
 	writeLockJSON(t, locksDir, "freeze-build.json", &lockfile.Lock{
@@ -166,7 +114,7 @@ func TestWhy_Frozen(t *testing.T) {
 		TTLSec:     600, // 10 min TTL, 1 min elapsed => 9 min remaining
 	})
 
-	stdout, _, code := captureWhy([]string{"build"})
+	stdout, _, code := captureCmd(cmdWhy, []string{"build"})
 	if code != ExitLockHeld {
 		t.Errorf("expected exit %d, got %d", ExitLockHeld, code)
 	}
@@ -185,7 +133,7 @@ func TestWhy_Frozen(t *testing.T) {
 }
 
 func TestWhy_FrozenAndHeld(t *testing.T) {
-	_, locksDir := setupWhyTest(t)
+	_, locksDir := setupTestRoot(t)
 
 	hostname, _ := os.Hostname()
 
@@ -207,7 +155,7 @@ func TestWhy_FrozenAndHeld(t *testing.T) {
 		TTLSec:     120,
 	})
 
-	stdout, _, code := captureWhy([]string{"deploy"})
+	stdout, _, code := captureCmd(cmdWhy, []string{"deploy"})
 	if code != ExitLockHeld {
 		t.Errorf("expected exit %d, got %d", ExitLockHeld, code)
 	}
@@ -221,7 +169,7 @@ func TestWhy_FrozenAndHeld(t *testing.T) {
 }
 
 func TestWhy_Expired(t *testing.T) {
-	_, locksDir := setupWhyTest(t)
+	_, locksDir := setupTestRoot(t)
 
 	writeLockJSON(t, locksDir, "backup.json", &lockfile.Lock{
 		Name:       "backup",
@@ -232,7 +180,7 @@ func TestWhy_Expired(t *testing.T) {
 		TTLSec:     60, // 1 min TTL, 10 min ago => expired
 	})
 
-	stdout, _, code := captureWhy([]string{"backup"})
+	stdout, _, code := captureCmd(cmdWhy, []string{"backup"})
 	if code != ExitLockHeld {
 		t.Errorf("expected exit %d, got %d", ExitLockHeld, code)
 	}
@@ -245,7 +193,7 @@ func TestWhy_Expired(t *testing.T) {
 }
 
 func TestWhy_DeadPID(t *testing.T) {
-	_, locksDir := setupWhyTest(t)
+	_, locksDir := setupTestRoot(t)
 
 	hostname, _ := os.Hostname()
 
@@ -258,7 +206,7 @@ func TestWhy_DeadPID(t *testing.T) {
 		AcquiredAt: time.Now().Add(-5 * time.Minute),
 	})
 
-	stdout, _, code := captureWhy([]string{"stale"})
+	stdout, _, code := captureCmd(cmdWhy, []string{"stale"})
 	if code != ExitLockHeld {
 		t.Errorf("expected exit %d, got %d", ExitLockHeld, code)
 	}
@@ -271,14 +219,14 @@ func TestWhy_DeadPID(t *testing.T) {
 }
 
 func TestWhy_Corrupted(t *testing.T) {
-	_, locksDir := setupWhyTest(t)
+	_, locksDir := setupTestRoot(t)
 
 	// Write invalid JSON
 	if err := os.WriteFile(filepath.Join(locksDir, "bad.json"), []byte("not json{{{"), 0600); err != nil {
 		t.Fatalf("write corrupted file: %v", err)
 	}
 
-	stdout, _, code := captureWhy([]string{"bad"})
+	stdout, _, code := captureCmd(cmdWhy, []string{"bad"})
 	if code != ExitLockHeld {
 		t.Errorf("expected exit %d, got %d", ExitLockHeld, code)
 	}
@@ -291,7 +239,7 @@ func TestWhy_Corrupted(t *testing.T) {
 }
 
 func TestWhy_SelfHeld(t *testing.T) {
-	_, locksDir := setupWhyTest(t)
+	_, locksDir := setupTestRoot(t)
 
 	hostname, _ := os.Hostname()
 	me := os.Getpid()
@@ -307,7 +255,7 @@ func TestWhy_SelfHeld(t *testing.T) {
 		AcquiredAt: time.Now().Add(-5 * time.Second),
 	})
 
-	stdout, _, code := captureWhy([]string{"mine"})
+	stdout, _, code := captureCmd(cmdWhy, []string{"mine"})
 	if code != ExitLockHeld {
 		t.Errorf("expected exit %d, got %d", ExitLockHeld, code)
 	}
@@ -320,9 +268,9 @@ func TestWhy_SelfHeld(t *testing.T) {
 }
 
 func TestWhy_InvalidName(t *testing.T) {
-	setupWhyTest(t)
+	setupTestRoot(t)
 
-	_, stderr, code := captureWhy([]string{"../bad"})
+	_, stderr, code := captureCmd(cmdWhy, []string{"../bad"})
 	if code != ExitUsage {
 		t.Errorf("expected exit %d, got %d", ExitUsage, code)
 	}
@@ -332,9 +280,9 @@ func TestWhy_InvalidName(t *testing.T) {
 }
 
 func TestWhy_NoArgs(t *testing.T) {
-	setupWhyTest(t)
+	setupTestRoot(t)
 
-	_, stderr, code := captureWhy([]string{})
+	_, stderr, code := captureCmd(cmdWhy, []string{})
 	if code != ExitUsage {
 		t.Errorf("expected exit %d, got %d", ExitUsage, code)
 	}
@@ -344,7 +292,7 @@ func TestWhy_NoArgs(t *testing.T) {
 }
 
 func TestWhy_JSON_Held(t *testing.T) {
-	_, locksDir := setupWhyTest(t)
+	_, locksDir := setupTestRoot(t)
 
 	hostname, _ := os.Hostname()
 	writeLockJSON(t, locksDir, "api.json", &lockfile.Lock{
@@ -356,7 +304,7 @@ func TestWhy_JSON_Held(t *testing.T) {
 		TTLSec:     300,
 	})
 
-	stdout, _, code := captureWhy([]string{"--json", "api"})
+	stdout, _, code := captureCmd(cmdWhy, []string{"--json", "api"})
 	if code != ExitLockHeld {
 		t.Errorf("expected exit %d, got %d", ExitLockHeld, code)
 	}
@@ -392,7 +340,7 @@ func TestWhy_JSON_Held(t *testing.T) {
 }
 
 func TestWhy_JSON_Frozen(t *testing.T) {
-	_, locksDir := setupWhyTest(t)
+	_, locksDir := setupTestRoot(t)
 
 	writeLockJSON(t, locksDir, "freeze-db.json", &lockfile.Lock{
 		Name:       "freeze-db",
@@ -403,7 +351,7 @@ func TestWhy_JSON_Frozen(t *testing.T) {
 		TTLSec:     600,
 	})
 
-	stdout, _, code := captureWhy([]string{"--json", "db"})
+	stdout, _, code := captureCmd(cmdWhy, []string{"--json", "db"})
 	if code != ExitLockHeld {
 		t.Errorf("expected exit %d, got %d", ExitLockHeld, code)
 	}
@@ -430,7 +378,7 @@ func TestWhy_JSON_Frozen(t *testing.T) {
 }
 
 func TestWhy_ExpiredFreeze_IsFree(t *testing.T) {
-	_, locksDir := setupWhyTest(t)
+	_, locksDir := setupTestRoot(t)
 
 	// Freeze that has already expired
 	writeLockJSON(t, locksDir, "freeze-old.json", &lockfile.Lock{
@@ -442,7 +390,7 @@ func TestWhy_ExpiredFreeze_IsFree(t *testing.T) {
 		TTLSec:     60, // expired 19 minutes ago
 	})
 
-	stdout, _, code := captureWhy([]string{"old"})
+	stdout, _, code := captureCmd(cmdWhy, []string{"old"})
 	if code != ExitOK {
 		t.Errorf("expected exit %d (expired freeze = free), got %d", ExitOK, code)
 	}
@@ -452,7 +400,7 @@ func TestWhy_ExpiredFreeze_IsFree(t *testing.T) {
 }
 
 func TestWhy_JSON_FrozenAndHeld(t *testing.T) {
-	_, locksDir := setupWhyTest(t)
+	_, locksDir := setupTestRoot(t)
 
 	hostname, _ := os.Hostname()
 
@@ -473,7 +421,7 @@ func TestWhy_JSON_FrozenAndHeld(t *testing.T) {
 		TTLSec:     120,
 	})
 
-	stdout, _, code := captureWhy([]string{"--json", "svc"})
+	stdout, _, code := captureCmd(cmdWhy, []string{"--json", "svc"})
 	if code != ExitLockHeld {
 		t.Errorf("expected exit %d, got %d", ExitLockHeld, code)
 	}
@@ -495,13 +443,13 @@ func TestWhy_JSON_FrozenAndHeld(t *testing.T) {
 }
 
 func TestWhy_JSON_Corrupted(t *testing.T) {
-	_, locksDir := setupWhyTest(t)
+	_, locksDir := setupTestRoot(t)
 
 	if err := os.WriteFile(filepath.Join(locksDir, "broken.json"), []byte("{invalid"), 0600); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 
-	stdout, _, code := captureWhy([]string{"--json", "broken"})
+	stdout, _, code := captureCmd(cmdWhy, []string{"--json", "broken"})
 	if code != ExitLockHeld {
 		t.Errorf("expected exit %d, got %d", ExitLockHeld, code)
 	}
@@ -529,7 +477,7 @@ func TestWhy_JSON_Corrupted(t *testing.T) {
 
 // Ensure all JSON output fields are valid by verifying a round-trip.
 func TestWhy_JSON_ValidStructure(t *testing.T) {
-	_, locksDir := setupWhyTest(t)
+	_, locksDir := setupTestRoot(t)
 
 	hostname, _ := os.Hostname()
 	writeLockJSON(t, locksDir, "full.json", &lockfile.Lock{
@@ -541,7 +489,7 @@ func TestWhy_JSON_ValidStructure(t *testing.T) {
 		TTLSec:     300,
 	})
 
-	stdout, _, _ := captureWhy([]string{"--json", "full"})
+	stdout, _, _ := captureCmd(cmdWhy, []string{"--json", "full"})
 
 	// Verify it's valid JSON
 	var raw map[string]interface{}
@@ -598,7 +546,7 @@ func TestWhy_JSON_ValidStructure(t *testing.T) {
 }
 
 func TestWhy_DeadPID_JSON(t *testing.T) {
-	_, locksDir := setupWhyTest(t)
+	_, locksDir := setupTestRoot(t)
 
 	hostname, _ := os.Hostname()
 	writeLockJSON(t, locksDir, "dead.json", &lockfile.Lock{
@@ -609,7 +557,7 @@ func TestWhy_DeadPID_JSON(t *testing.T) {
 		AcquiredAt: time.Now().Add(-3 * time.Minute),
 	})
 
-	stdout, _, code := captureWhy([]string{"--json", "dead"})
+	stdout, _, code := captureCmd(cmdWhy, []string{"--json", "dead"})
 	if code != ExitLockHeld {
 		t.Errorf("expected exit %d, got %d", ExitLockHeld, code)
 	}
@@ -644,7 +592,7 @@ func TestWhy_DeadPID_JSON(t *testing.T) {
 
 // Verify the output includes lock name in suggestions.
 func TestWhy_SuggestionsIncludeLockName(t *testing.T) {
-	_, locksDir := setupWhyTest(t)
+	_, locksDir := setupTestRoot(t)
 
 	hostname, _ := os.Hostname()
 	writeLockJSON(t, locksDir, "my-lock.json", &lockfile.Lock{
@@ -655,7 +603,7 @@ func TestWhy_SuggestionsIncludeLockName(t *testing.T) {
 		AcquiredAt: time.Now().Add(-10 * time.Second),
 	})
 
-	stdout, _, _ := captureWhy([]string{"--json", "my-lock"})
+	stdout, _, _ := captureCmd(cmdWhy, []string{"--json", "my-lock"})
 
 	var out whyOutput
 	if err := json.Unmarshal([]byte(stdout), &out); err != nil {
