@@ -94,6 +94,9 @@ func usage() {
 	fmt.Println("  unlock <name>     Release a lock")
 	fmt.Println("    --force         Remove without ownership check (break-glass)")
 	fmt.Println("    --break-stale   Remove only if stale (expired TTL or dead PID)")
+	fmt.Println("    --owner <name>  Release all locks held by owner")
+	fmt.Println("    --all           Release all locks held by current identity")
+	fmt.Println("    --json          Output in JSON format (with --owner/--all)")
 	fmt.Println("  status [name]     Show lock status")
 	fmt.Println("    --json          Output in JSON format")
 	fmt.Println("    --prune-expired Remove expired locks while listing")
@@ -317,17 +320,48 @@ func printLockAcquireJSON(name string) {
 	fmt.Println(string(data))
 }
 
+// unlockByOwnerOutput is the JSON structure for unlock --owner/--all output.
+type unlockByOwnerOutput struct {
+	Released []string `json:"released"`
+	Count    int      `json:"count"`
+}
+
 func cmdUnlock(args []string) int {
 	fs := flag.NewFlagSet("unlock", flag.ExitOnError)
 	force := fs.Bool("force", false, "Remove lock without ownership check (break-glass)")
 	breakStale := fs.Bool("break-stale", false, "Remove lock only if stale (expired TTL or dead PID)")
+	owner := fs.String("owner", "", "Release all locks held by this owner")
+	all := fs.Bool("all", false, "Release all locks held by current identity")
+	jsonOutput := fs.Bool("json", false, "Output in JSON format")
 	_ = fs.Parse(args)
 
-	if fs.NArg() < 1 {
-		fmt.Fprintln(os.Stderr, "usage: lokt unlock [--force | --break-stale] <name>")
+	batchMode := *owner != "" || *all
+
+	// Mutual exclusion: --owner/--all cannot combine with positional name
+	if batchMode && fs.NArg() > 0 {
+		fmt.Fprintln(os.Stderr, "error: --owner/--all cannot be combined with a lock name")
 		return ExitUsage
 	}
-	name := fs.Arg(0)
+
+	// Mutual exclusion: --force/--break-stale cannot combine with --owner/--all
+	if batchMode && (*force || *breakStale) {
+		fmt.Fprintln(os.Stderr, "error: --force/--break-stale cannot be combined with --owner/--all")
+		return ExitUsage
+	}
+
+	// Mutual exclusion: --owner and --all
+	if *owner != "" && *all {
+		fmt.Fprintln(os.Stderr, "error: --owner and --all are mutually exclusive")
+		return ExitUsage
+	}
+
+	// Require either a positional name or --owner/--all
+	if !batchMode && fs.NArg() < 1 {
+		fmt.Fprintln(os.Stderr, "usage: lokt unlock [--force | --break-stale] <name>")
+		fmt.Fprintln(os.Stderr, "       lokt unlock --owner <owner> [--json]")
+		fmt.Fprintln(os.Stderr, "       lokt unlock --all [--json]")
+		return ExitUsage
+	}
 
 	rootDir, err := root.Find()
 	if err != nil {
@@ -336,6 +370,43 @@ func cmdUnlock(args []string) int {
 	}
 
 	auditor := audit.NewWriter(rootDir)
+
+	// Batch mode: release by owner
+	if batchMode {
+		targetOwner := *owner
+		if *all {
+			targetOwner = identity.Current().Owner
+		}
+
+		released, err := lock.ReleaseByOwner(rootDir, targetOwner, lock.ReleaseOptions{
+			Auditor: auditor,
+		})
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			return ExitError
+		}
+
+		switch {
+		case *jsonOutput:
+			if released == nil {
+				released = []string{}
+			}
+			out := unlockByOwnerOutput{
+				Released: released,
+				Count:    len(released),
+			}
+			data, _ := json.MarshalIndent(out, "", "  ")
+			fmt.Println(string(data))
+		case len(released) == 0:
+			fmt.Println("no locks matched")
+		default:
+			fmt.Printf("released %d lock(s)\n", len(released))
+		}
+		return ExitOK
+	}
+
+	// Single lock mode
+	name := fs.Arg(0)
 	err = lock.Release(rootDir, name, lock.ReleaseOptions{
 		Force:      *force,
 		BreakStale: *breakStale,
