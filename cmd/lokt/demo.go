@@ -123,26 +123,33 @@ touch "$STATE_DIR/out"
 # section to a file is portable, readable, and debuggable. You can
 # even add debug prints to it and re-run the demo.
 #
-# The critical section does exactly this:
-#   1. Read the shared counter to get position (WHERE to write)
-#   2. If position >= ROWS * COLS: all cells filled, exit
-#   3. Compute row = position / COLS, col = position % COLS
-#   4. Derive the character via a shared "ping" file (see below)
-#   5. Append that character to $STATE_DIR/row_NNNN
-#   6. If col == COLS-1 (last column): row complete, append to output
-#   7. Increment the counter
+# The critical section models a multi-step computation over shared
+# state — the kind of thing locks exist to protect. It reads a
+# position counter, breaks the character derivation into three
+# intermediate results stored in shared files, reads them back,
+# and combines them for the final character.
 #
-# Character derivation uses a nonce (random number) written to a
-# shared file. The worker writes its nonce, then reads the file
-# back. Under the lock, the read returns the worker's own nonce —
-# the nonce matches, confirming exclusive access, and the worker
-# uses the correct character hex[row % 16] for uniform rows.
+# The three work files hold values that, when consistent, combine
+# to produce the correct character: (a + b + c) % 16 = row % 16.
+# Under the lock, all three are from the same worker — they cancel
+# correctly, and each row gets a uniform fill (row 0 = '0', etc.).
 #
-# Without the lock, other workers overwrite the nonce between the
-# write and the read. The worker reads SOMEONE ELSE'S nonce — the
-# mismatch reveals the race, and the foreign nonce (a random number)
-# becomes the character source. Since every worker writes a different
-# random nonce, every cell gets an unpredictable character.
+# Without the lock, other workers overwrite the work files between
+# our writes and our reads. We read a mix of values from different
+# workers at different grid positions. The values no longer cancel —
+# the character is unpredictable.
+#
+# To make this worse, the counter is temporarily set to an
+# intermediate value between our read and our final write-back.
+# Under the lock, no one sees this. Without the lock, other workers
+# read the intermediate counter, jump to wrong grid positions, and
+# write intermediates for those positions — cross-contaminating
+# everyone's work files.
+#
+# This mirrors real systems: a map-reduce accumulator, a running
+# sum, a multi-field database update — any computation that stores
+# partial results in shared memory needs a lock to prevent other
+# threads from seeing (and acting on) incomplete state.
 #
 # One character per lock acquisition. With a 16x32 grid, that is
 # 512 acquisitions, each contested by up to 8 workers. That is
@@ -152,8 +159,9 @@ cat > "$STATE_DIR/critical.sh" << 'CRITICAL_EOF'
 #!/usr/bin/env bash
 # ── Critical section ──────────────────────────────────────────
 # Runs INSIDE the lokt guard lock (or unguarded in --no-lock mode).
-# Reads the counter, derives position and character, writes the
-# character to the row buffer, increments the counter.
+# Models a multi-step computation: reads position, stores
+# intermediate results in shared files, reads them back, combines
+# for the character, writes to row buffer, fixes the counter.
 #
 # Arguments: <state_dir> <out_file> <cols> <rows>
 
@@ -163,13 +171,16 @@ cols="$3"
 rows="$4"
 total=$(( rows * cols ))
 
-# Read the position counter. In no-lock mode, races produce
-# corrupt reads. Strip non-digits to survive.
+# Read the position counter. In no-lock mode, this might be an
+# intermediate value from another worker — that is the point.
 i=$(cat "$state_dir/next" 2>/dev/null || true)
 i="${i//[!0-9]/}"
 i="${i:-0}"
 
 # All cells filled? Nothing left to do.
+# Intermediate values from other workers are always < total
+# (they use RANDOM % total), so this only triggers on the real
+# "done" value when the counter reaches total.
 if [ "$i" -ge "$total" ]; then
     exit 0
 fi
@@ -182,58 +193,71 @@ col=$(( i % cols ))
 hex_chars="0123456789abcdef"
 label="${hex_chars:$(( row % 16 )):1}"
 
-# ── Character derivation via shared nonce file ───────────────
-# Write a random nonce to a shared file, then read it back.
+# ── Multi-step computation over shared state ─────────────────
+# Break the character derivation into three intermediate values
+# stored in shared files. The formula:
 #
-# Under the lock: no other worker can intervene. We read our own
-# nonce (it matches), confirming exclusive access. Character is
-# hex[row % 16]. Each row gets a uniform fill: row 0 = all '0',
-# row 1 = all '1', etc.
+#   character = hex[ (a + b + c) % 16 ]
 #
-# Without the lock: between our write and our read, other workers
-# overwrite the nonce with THEIR random numbers. We read someone
-# else's nonce — the mismatch tells us the data is compromised.
-# We use the foreign nonce (mod 16) as the character, which is
-# effectively random. With 8 workers racing, every cell gets an
-# unpredictable character — the output is noise.
-my_nonce=$RANDOM
-echo "$my_nonce" > "$state_dir/nonce"
-# Brief pause: under the lock this is a no-op (no other writers).
-# Without the lock, it gives other workers time to overwrite the
-# nonce file, ensuring we almost always read a foreign value.
-sleep 0.001
-their_nonce=$(cat "$state_dir/nonce" 2>/dev/null || true)
-their_nonce="${their_nonce//[!0-9]/}"
-their_nonce="${their_nonce:-0}"
-if [ "$their_nonce" -eq "$my_nonce" ]; then
-    # Nonce matches — we have exclusive access. Use correct character.
-    ch="${hex_chars:$(( (i / cols) % 16 )):1}"
-else
-    # Nonce mismatch — race detected. Use a fresh random number for
-    # the character. Each worker has its own $RANDOM stream, so even
-    # workers at the same position produce different characters.
-    # Under the lock, this branch is never reached.
-    ch="${hex_chars:$(( RANDOM % 16 )):1}"
-fi
+# where a = row % 16, b = col % 16, c = (16 - b) % 16.
+# When all three are consistent: (a + b + c) % 16 = a % 16
+# because b + c ≡ 0 (mod 16). So character = hex[row % 16].
+#
+# Under the lock: all three values are ours. They cancel. Clean.
+# Without the lock: values come from different workers at different
+# positions. They do not cancel. The character is noise.
 
-# Append this character to the row's buffer file. Each row
-# accumulates $cols characters, one per critical section call.
+# Phase 1: Store our intermediates in the shared work files.
+wa=$(( row % 16 ))
+wb=$(( col % 16 ))
+wc=$(( (16 - wb) % 16 ))
+echo "$wa" > "$state_dir/work_a"
+echo "$wb" > "$state_dir/work_b"
+echo "$wc" > "$state_dir/work_c"
+
+# Phase 2: Counter enters intermediate state.
+# Temporarily set to an arbitrary grid position — represents
+# "computation in progress." Under the lock, no one sees this.
+# Without the lock, other workers read it, jump to the wrong
+# position, and write their own intermediates to the work files.
+echo $(( RANDOM % total )) > "$state_dir/next"
+
+# Phase 3: Read back the computation results.
+# Under the lock: we read our own values from phase 1.
+# Without the lock: other workers (misdirected by phase 2) have
+# overwritten some work files with values from different positions.
+# The b+c cancellation breaks, and the character is wrong.
+ra=$(cat "$state_dir/work_a" 2>/dev/null || true)
+rb=$(cat "$state_dir/work_b" 2>/dev/null || true)
+rc=$(cat "$state_dir/work_c" 2>/dev/null || true)
+ra="${ra//[!0-9]/}"; ra="${ra:-0}"
+rb="${rb//[!0-9]/}"; rb="${rb:-0}"
+rc="${rc//[!0-9]/}"; rc="${rc:-0}"
+
+ch="${hex_chars:$(( (ra + rb + rc) % 16 )):1}"
+
+# Phase 4: Write the character to the row buffer.
 row_file="$state_dir/row_$(printf '%04d' "$row")"
 printf "%s" "$ch" >> "$row_file"
 
-# If this was the last column, the row is complete. Format it
-# as "<label> | <all characters>" and append to the output file.
-# The tail -f process will pick it up and display it live.
-# head -c caps the buffer at $cols characters. In lock mode the
-# buffer is exactly $cols, so this is a no-op. In no-lock mode
-# concurrent appends inflate the buffer — capping keeps output
-# lines bounded so the terminal is not flooded.
-if [ "$col" -eq $(( cols - 1 )) ]; then
-    content=$(head -c "$cols" "$row_file")
-    printf "%s | %s\n" "$label" "$content" >> "$out_file"
+# Flush this row when the buffer has enough characters.
+# We check buffer size instead of column position because counter
+# poisoning in phase 2 can misdirect workers to any grid position.
+# A column check would fire prematurely from misdirected workers.
+# In lock mode the buffer reaches $cols exactly once (sequential).
+# In no-lock mode concurrent appends inflate it — we still flush
+# once, and head -c caps the output at $cols characters.
+# mkdir is atomic — exactly one worker succeeds per row,
+# preventing duplicate output lines.
+buf_size=$(wc -c < "$row_file" 2>/dev/null || echo 0)
+if [ "$buf_size" -ge "$cols" ]; then
+    if mkdir "$state_dir/done_$(printf '%04d' "$row")" 2>/dev/null; then
+        content=$(head -c "$cols" "$row_file")
+        printf "%s | %s\n" "$label" "$content" >> "$out_file"
+    fi
 fi
 
-# Advance the counter for the next worker.
+# Phase 5: Finalize — restore counter to correct next value.
 echo $(( i + 1 )) > "$state_dir/next"
 CRITICAL_EOF
 
@@ -374,6 +398,23 @@ done
 
 for pid in $WORKER_PIDS; do
     wait "$pid" 2>/dev/null || true
+done
+
+# ── Final flush ─────────────────────────────────────────────────
+# In no-lock mode, counter races can prevent some rows from being
+# flushed during execution (no worker happened to process the last
+# column for that row). Flush any remaining rows now.
+
+r=0
+while [ "$r" -lt "$ROWS" ]; do
+    row_pad=$(printf '%04d' "$r")
+    if [ -f "$STATE_DIR/row_$row_pad" ] && ! [ -d "$STATE_DIR/done_$row_pad" ]; then
+        hex_chars="0123456789abcdef"
+        label="${hex_chars:$(( r % 16 )):1}"
+        content=$(head -c "$COLS" "$STATE_DIR/row_$row_pad")
+        printf "%s | %s\n" "$label" "$content" >> "$STATE_DIR/out"
+    fi
+    r=$(( r + 1 ))
 done
 
 # ── Summary ───────────────────────────────────────────────────────

@@ -81,6 +81,22 @@ HEALTH CHECK
       - Clock sanity
       Exit code 1 on critical failure, 0 otherwise.
 
+DEMO
+----
+
+Generate and run a visual concurrency demo. The demo spawns workers that
+race to build a hex wall — with and without locking — so you can see what
+happens when concurrent processes share state without coordination.
+
+  lokt demo
+      Generate the hexwall demo script in the current directory.
+
+  ./lokt-hexwall-demo.sh              # with locking (clean)
+  ./lokt-hexwall-demo.sh --no-lock    # without locking (chaos)
+  ./lokt-hexwall-demo.sh --help       # all options
+
+See DEMO.md for a detailed walkthrough of how the demo works.
+
 VERSION
 -------
 

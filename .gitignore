@@ -25,3 +25,6 @@ Thumbs.db
 # Local dev
 .lokt/
 .loctree/
+
+# Generated
+lokt-hexwall-demo.sh
