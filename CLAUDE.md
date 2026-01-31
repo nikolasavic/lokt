@@ -59,11 +59,12 @@ The agent should guide the workflow, not just respond:
 | Push to remote | Ask user to approve | Raw `git push` |
 | Breaking changes | Discuss impact first | Silent protocol changes |
 
-**Lint-on-Edit:** After editing Go files, run:
+**Lint-on-Edit (MANDATORY before commit/push):** After every Go code change, run both:
 ```bash
 go test ./...        # Run tests
-golangci-lint run    # Lint check
+golangci-lint run    # Lint + format check (includes gofmt, goimports)
 ```
+Never commit or push without both passing. No exceptions.
 
 ## Tooling
 
@@ -95,9 +96,11 @@ For versioned builds with ldflags:
 
 ### Linter Configuration
 
-Project uses `.golangci.yml` with these linters enabled:
-- errcheck, gosimple, govet, staticcheck, unused (defaults)
-- gofmt, goimports, misspell, gosec, gocritic, revive (additional)
+Project uses `.golangci.yml` (v2 format) with golangci-lint v2.
+
+**Linters** (on top of defaults): errname, errorlint, gocritic, gosec, misspell, revive, unconvert
+
+**Formatters** (run as part of `golangci-lint run`): gofmt, goimports
 
 ### Editor Config
 
@@ -133,7 +136,7 @@ go test ./...
 # Run single test
 go test -run TestName ./path/to/package
 
-# Lint
+# Lint + format (MUST pass before commit/push)
 golangci-lint run
 ```
 

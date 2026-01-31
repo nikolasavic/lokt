@@ -1,82 +1,90 @@
-# golangci-lint configuration
+# golangci-lint v2 configuration
 # Run: golangci-lint run
+version: "2"
 
 run:
-  timeout: 5m
   modules-download-mode: readonly
 
 linters:
   enable:
-    # Default linters
-    - errcheck      # Check for unchecked errors
-    - gosimple      # Simplify code
-    - govet         # Go vet
-    - ineffassign   # Detect unused assignments
-    - staticcheck   # Static analysis
-    - unused        # Find unused code
-
-    # Additional useful linters
-    - gofmt         # Check formatting
-    - goimports     # Check imports
-    - misspell      # Catch typos
-    - unconvert     # Remove unnecessary conversions
-    - gosec         # Security issues
     - errname       # Error naming conventions
     - errorlint     # Error wrapping issues
     - gocritic      # Opinionated linter
+    - gosec         # Security issues
+    - misspell      # Catch typos
     - revive        # Fast, configurable linter
+    - unconvert     # Remove unnecessary conversions
 
-linters-settings:
-  errcheck:
-    check-type-assertions: true
-    check-blank: false  # Allow _ = to explicitly ignore errors
+  settings:
+    errcheck:
+      check-type-assertions: true
+      check-blank: false  # Allow _ = to explicitly ignore errors
 
-  govet:
-    enable-all: true
-    disable:
-      - fieldalignment  # Micro-optimization, not worth the churn
-      - shadow          # Too noisy in tests
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - performance
 
-  goimports:
-    local-prefixes: github.com/nikolasavic/lokt
+    gosec:
+      excludes:
+        - G204  # Subprocess with variable args (expected for guard command)
+        - G302  # File permissions (0644 is fine for lock files)
+        - G304  # File path from variable (expected for file operations)
 
-  gocritic:
-    enabled-tags:
-      - diagnostic
-      - performance
+    govet:
+      enable-all: true
+      disable:
+        - fieldalignment  # Micro-optimization, not worth the churn
+        - shadow          # Too noisy in tests
 
-  gosec:
-    excludes:
-      - G204  # Subprocess with variable args (expected for guard command)
-      - G302  # File permissions (0644 is fine for lock files)
-      - G304  # File path from variable (expected for file operations)
+    revive:
+      rules:
+        - name: blank-imports
+        - name: context-as-argument
+        - name: context-keys-type
+        - name: error-return
+        - name: error-strings
+        - name: error-naming
+        - name: increment-decrement
+        - name: var-declaration
+        - name: range
+        - name: receiver-naming
+        - name: time-naming
+        - name: unexported-return
+        - name: indent-error-flow
+        - name: errorf
+        # Disabled: exported, package-comments (too noisy for small CLIs)
 
-  revive:
+  exclusions:
+    generated: lax
     rules:
-      - name: blank-imports
-      - name: context-as-argument
-      - name: context-keys-type
-      - name: error-return
-      - name: error-strings
-      - name: error-naming
-      - name: increment-decrement
-      - name: var-declaration
-      - name: range
-      - name: receiver-naming
-      - name: time-naming
-      - name: unexported-return
-      - name: indent-error-flow
-      - name: errorf
-      # Disabled: exported, package-comments (too noisy for small CLIs)
+      # Allow type assertions on errors in main (CLI simplicity)
+      - linters:
+          - errorlint
+        path: cmd/lokt/main.go
+        text: type assertion on error
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
 
 issues:
-  exclude-use-default: false
   max-issues-per-linter: 0
   max-same-issues: 0
 
-  exclude-rules:
-    # Allow type assertions on errors in main (CLI simplicity)
-    - path: cmd/lokt/main.go
-      linters:
-        - errorlint
-      text: "type assertion on error"
+formatters:
+  enable:
+    - gofmt       # Check formatting
+    - goimports   # Check imports
+
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/nikolasavic/lokt
+
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
