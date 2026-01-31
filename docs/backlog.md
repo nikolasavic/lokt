@@ -20,7 +20,7 @@
 | L-201  | Auto-prune dead locks before acquire     | done    | If PID dead + same host, silently clean up stale lock instead of failing. Self-healing. beads:lokt-e01 |
 | L-202  | `lokt doctor` health check               | done | Pre-flight validation: dir writable, no NFS, no clock skew. One command to verify setup. beads:lokt-8s7 |
 | L-203  | Handle corrupted lock files gracefully   | done | Malformed JSON treated as stale, not crash. Defensive parsing with clear logging. beads:lokt-afw |
-| L-204  | Warn/refuse on network filesystems       | ready   | Detect NFS/CIFS, warn loudly. Atomic exclusive create not guaranteed on network FS. |
+| L-204  | Warn/refuse on network filesystems       | done    | Detect NFS/CIFS, warn loudly. Atomic exclusive create not guaranteed on network FS. |
 
 ---
 
