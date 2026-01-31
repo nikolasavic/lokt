@@ -259,10 +259,22 @@ func cmdUnlock(args []string) int {
 }
 
 func cmdStatus(args []string) int {
+	// Reorder args: flags before positional args.
+	// Go's flag package stops at the first non-flag argument,
+	// so "lokt status zone-api --json" would not parse --json.
+	var flags, pos []string
+	for _, a := range args {
+		if len(a) > 0 && a[0] == '-' {
+			flags = append(flags, a)
+		} else {
+			pos = append(pos, a)
+		}
+	}
+
 	fs := flag.NewFlagSet("status", flag.ExitOnError)
 	pruneExpired := fs.Bool("prune-expired", false, "Remove expired locks while listing")
 	jsonOutput := fs.Bool("json", false, "Output in JSON format")
-	_ = fs.Parse(args)
+	_ = fs.Parse(append(flags, pos...))
 
 	rootDir, err := root.Find()
 	if err != nil {
