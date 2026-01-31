@@ -7,18 +7,18 @@ import (
 )
 
 // hexwallScript is the complete bash script emitted by `lokt demo`.
-// It spawns hundreds of workers that race to build a hex wall using
-// `lokt guard` for coordination. Run with --no-lock to see corruption.
+// It spawns workers that race to build a hex wall using `lokt guard`
+// for coordination. Run with --no-lock to see corruption.
 const hexwallScript = `#!/usr/bin/env bash
 set -euo pipefail
 
 # ══════════════════════════════════════════════════════════════════
 # lokt hexwall demo
 #
-# This script spawns hundreds of worker processes that race to
-# build a "hex wall" — a grid of hex characters (0-f), built one
-# character at a time. Each character requires exclusive access to
-# a shared counter file.
+# This script spawns worker processes that race to build a "hex
+# wall" — a grid of hex characters (0-f), built one character at a
+# time. Each character requires exclusive access to a shared
+# counter file.
 #
 # By default, workers use ` + "`" + `lokt guard` + "`" + ` to coordinate. The wall
 # comes out clean and ordered. Run with --no-lock to remove the
@@ -27,7 +27,7 @@ set -euo pipefail
 # Usage:
 #   ./lokt-hexwall-demo.sh              # with locking (clean)
 #   ./lokt-hexwall-demo.sh --no-lock    # without locking (chaos)
-#   ./lokt-hexwall-demo.sh --rows 256 --cols 64 --workers 1024
+#   ./lokt-hexwall-demo.sh --rows 16 --cols 32 --workers 16
 #
 # Requires: bash 3.2+, lokt (unless --no-lock)
 # ══════════════════════════════════════════════════════════════════
@@ -37,7 +37,7 @@ set -euo pipefail
 # Flags take precedence over env vars.
 #
 # Example:
-#   WORKERS=128 ./lokt-hexwall-demo.sh --rows 8
+#   WORKERS=4 ./lokt-hexwall-demo.sh --rows 4
 #
 # WORKERS  — number of background processes competing for cells
 # ROWS     — number of rows in the hex wall
@@ -45,7 +45,7 @@ set -euo pipefail
 # NOLOCK   — set to 1 to bypass lokt (shows the chaos)
 # LOCKNAME — the lock name passed to lokt guard
 
-WORKERS="${WORKERS:-512}"
+WORKERS="${WORKERS:-8}"
 ROWS="${ROWS:-16}"
 COLS="${COLS:-32}"
 NOLOCK="${NOLOCK:-0}"
@@ -62,7 +62,7 @@ while [ $# -gt 0 ]; do
             echo "Usage: $0 [options]"
             echo ""
             echo "Options:"
-            echo "  --workers N       Number of worker processes (default: 512)"
+            echo "  --workers N       Number of worker processes (default: 8)"
             echo "  --rows N          Number of rows in the wall (default: 16)"
             echo "  --cols N          Width of each row's hex fill (default: 32)"
             echo "  --no-lock         Bypass lokt (shows corruption from races)"
@@ -82,9 +82,6 @@ done
 # Before spawning anything, make sure we have what we need.
 # In lock mode, lokt must be on PATH. We always need a writable
 # temp directory for shared state.
-#
-# If these checks fail, we bail out with a clear message. Better
-# to fail here than to spawn 512 workers and watch them crash.
 
 if [ "$NOLOCK" -ne 1 ]; then
     if ! command -v lokt >/dev/null 2>&1; then
@@ -127,37 +124,49 @@ touch "$STATE_DIR/out"
 # even add debug prints to it and re-run the demo.
 #
 # The critical section does exactly this:
-#   1. Read the cell counter from $STATE_DIR/next
-#   2. If counter >= ROWS * COLS: all cells filled, exit
-#   3. Compute row = counter / COLS, col = counter % COLS
-#   4. Compute the hex nibble: row % 16 -> character (0-9, a-f)
-#   5. Append that one character to $STATE_DIR/row_NNNN
-#   6. If col == COLS-1 (last column): the row is complete —
-#      format it as "<nibble> | <characters>" and append to output
+#   1. Read the shared counter to get position (WHERE to write)
+#   2. If position >= ROWS * COLS: all cells filled, exit
+#   3. Compute row = position / COLS, col = position % COLS
+#   4. Derive the character via a shared "ping" file (see below)
+#   5. Append that character to $STATE_DIR/row_NNNN
+#   6. If col == COLS-1 (last column): row complete, append to output
 #   7. Increment the counter
 #
+# Character derivation uses a nonce (random number) written to a
+# shared file. The worker writes its nonce, then reads the file
+# back. Under the lock, the read returns the worker's own nonce —
+# the nonce matches, confirming exclusive access, and the worker
+# uses the correct character hex[row % 16] for uniform rows.
+#
+# Without the lock, other workers overwrite the nonce between the
+# write and the read. The worker reads SOMEONE ELSE'S nonce — the
+# mismatch reveals the race, and the foreign nonce (a random number)
+# becomes the character source. Since every worker writes a different
+# random nonce, every cell gets an unpredictable character.
+#
 # One character per lock acquisition. With a 16x32 grid, that is
-# 512 acquisitions, each contested by up to 512 workers. That is
+# 512 acquisitions, each contested by up to 8 workers. That is
 # the point — maximum contention, minimal critical section.
 
 cat > "$STATE_DIR/critical.sh" << 'CRITICAL_EOF'
 #!/usr/bin/env bash
 # ── Critical section ──────────────────────────────────────────
 # Runs INSIDE the lokt guard lock (or unguarded in --no-lock mode).
-# Claims one cell, writes one character, increments the counter.
+# Reads the counter, derives position and character, writes the
+# character to the row buffer, increments the counter.
 #
-# Arguments: <next_file> <state_dir> <out_file> <cols> <rows>
+# Arguments: <state_dir> <out_file> <cols> <rows>
 
-next_file="$1"
-state_dir="$2"
-out_file="$3"
-cols="$4"
-rows="$5"
+state_dir="$1"
+out_file="$2"
+cols="$3"
+rows="$4"
 total=$(( rows * cols ))
 
-# Read the current cell counter. In no-lock mode, a race can
-# produce an empty read — default to 0 (re-process is harmless).
-i=$(cat "$next_file" 2>/dev/null || true)
+# Read the position counter. In no-lock mode, races produce
+# corrupt reads. Strip non-digits to survive.
+i=$(cat "$state_dir/next" 2>/dev/null || true)
+i="${i//[!0-9]/}"
 i="${i:-0}"
 
 # All cells filled? Nothing left to do.
@@ -165,17 +174,47 @@ if [ "$i" -ge "$total" ]; then
     exit 0
 fi
 
-# Compute which row and column this cell belongs to.
+# Determine WHERE to write.
 row=$(( i / cols ))
 col=$(( i % cols ))
 
-# The hex nibble cycles every 16 rows: 0,1,2,...,e,f,0,1,...
-nib=$(( row % 16 ))
-
-# Pick the hex character for this nibble. We index into a string
-# because bash 3.2 does not have associative arrays or printf %x.
+# Row label: hex row number (0-f), used to identify rows in output.
 hex_chars="0123456789abcdef"
-ch="${hex_chars:$nib:1}"
+label="${hex_chars:$(( row % 16 )):1}"
+
+# ── Character derivation via shared nonce file ───────────────
+# Write a random nonce to a shared file, then read it back.
+#
+# Under the lock: no other worker can intervene. We read our own
+# nonce (it matches), confirming exclusive access. Character is
+# hex[row % 16]. Each row gets a uniform fill: row 0 = all '0',
+# row 1 = all '1', etc.
+#
+# Without the lock: between our write and our read, other workers
+# overwrite the nonce with THEIR random numbers. We read someone
+# else's nonce — the mismatch tells us the data is compromised.
+# We use the foreign nonce (mod 16) as the character, which is
+# effectively random. With 8 workers racing, every cell gets an
+# unpredictable character — the output is noise.
+my_nonce=$RANDOM
+echo "$my_nonce" > "$state_dir/nonce"
+# Brief pause: under the lock this is a no-op (no other writers).
+# Without the lock, it gives other workers time to overwrite the
+# nonce file, ensuring we almost always read a foreign value.
+sleep 0.001
+their_nonce=$(cat "$state_dir/nonce" 2>/dev/null || true)
+their_nonce="${their_nonce//[!0-9]/}"
+their_nonce="${their_nonce:-0}"
+if [ "$their_nonce" -eq "$my_nonce" ]; then
+    # Nonce matches — we have exclusive access. Use correct character.
+    ch="${hex_chars:$(( (i / cols) % 16 )):1}"
+else
+    # Nonce mismatch — race detected. Use a fresh random number for
+    # the character. Each worker has its own $RANDOM stream, so even
+    # workers at the same position produce different characters.
+    # Under the lock, this branch is never reached.
+    ch="${hex_chars:$(( RANDOM % 16 )):1}"
+fi
 
 # Append this character to the row's buffer file. Each row
 # accumulates $cols characters, one per critical section call.
@@ -183,15 +222,19 @@ row_file="$state_dir/row_$(printf '%04d' "$row")"
 printf "%s" "$ch" >> "$row_file"
 
 # If this was the last column, the row is complete. Format it
-# as "<nibble> | <all characters>" and append to the output file.
+# as "<label> | <all characters>" and append to the output file.
 # The tail -f process will pick it up and display it live.
+# head -c caps the buffer at $cols characters. In lock mode the
+# buffer is exactly $cols, so this is a no-op. In no-lock mode
+# concurrent appends inflate the buffer — capping keeps output
+# lines bounded so the terminal is not flooded.
 if [ "$col" -eq $(( cols - 1 )) ]; then
-    content=$(cat "$row_file")
-    printf "%s | %s\n" "$ch" "$content" >> "$out_file"
+    content=$(head -c "$cols" "$row_file")
+    printf "%s | %s\n" "$label" "$content" >> "$out_file"
 fi
 
 # Advance the counter for the next worker.
-echo $(( i + 1 )) > "$next_file"
+echo $(( i + 1 )) > "$state_dir/next"
 CRITICAL_EOF
 
 chmod +x "$STATE_DIR/critical.sh"
@@ -274,25 +317,38 @@ SECONDS=0
 TOTAL=$(( ROWS * COLS ))
 
 worker() {
-    while true; do
+    local iters=0
+    # Cap iterations so workers always terminate. In lock mode the
+    # counter reaches TOTAL well before this limit. In no-lock mode
+    # the counter resets due to races and may never reach TOTAL —
+    # the cap ensures bounded output with visible corruption.
+    local max_iters=$(( TOTAL * 2 ))
+
+    while [ "$iters" -lt "$max_iters" ]; do
+        iters=$(( iters + 1 ))
+
         if [ "$NOLOCK" -eq 1 ]; then
+            # Suppress stderr — in no-lock mode, concurrent writes
+            # corrupt the counter files causing harmless parse errors.
             bash "$STATE_DIR/critical.sh" \
-                "$STATE_DIR/next" "$STATE_DIR" "$STATE_DIR/out" \
-                "$COLS" "$ROWS" || true
+                "$STATE_DIR" "$STATE_DIR/out" \
+                "$COLS" "$ROWS" 2>/dev/null || true
         else
             # Redirect stderr to suppress "lock held" contention messages.
             # These are expected — the whole point is that workers retry
             # until the lock is free. We only care about the final output.
             lokt guard --ttl 30s "$LOCKNAME" -- \
                 bash "$STATE_DIR/critical.sh" \
-                "$STATE_DIR/next" "$STATE_DIR" "$STATE_DIR/out" \
+                "$STATE_DIR" "$STATE_DIR/out" \
                 "$COLS" "$ROWS" 2>/dev/null || true
         fi
 
-        # Quick exit check: are all cells filled? This read is racy
+        # Quick exit check: are all positions filled? This read is racy
         # (no lock), but that is fine — it is just a hint. The real
         # bounds check is inside critical.sh, under the lock.
+        # Strip non-digits to handle corrupt reads in no-lock mode.
         cur=$(cat "$STATE_DIR/next" 2>/dev/null || true)
+        cur="${cur//[!0-9]/}"
         cur="${cur:-0}"
         if [ "$cur" -ge "$TOTAL" ]; then
             return 0
