@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -104,7 +105,7 @@ func TestAcquireRace(t *testing.T) {
 	root := t.TempDir()
 
 	// Race multiple goroutines - exactly one should win
-	const n = 10
+	const n = 100
 	var wg sync.WaitGroup
 	wins := make(chan int, n)
 
@@ -129,6 +130,77 @@ func TestAcquireRace(t *testing.T) {
 
 	if winCount != 1 {
 		t.Errorf("Expected exactly 1 winner, got %d", winCount)
+	}
+}
+
+func TestAcquireRace_WaitPollRounds(t *testing.T) {
+	root := t.TempDir()
+
+	const goroutines = 100
+	const rounds = 5
+
+	for round := 0; round < rounds; round++ {
+		lockName := fmt.Sprintf("race-poll-%d", round)
+
+		// Pre-create a lock held by a foreign owner so all goroutines
+		// must poll via AcquireWithWait rather than winning immediately.
+		locksDir := filepath.Join(root, "locks")
+		if err := os.MkdirAll(locksDir, 0750); err != nil {
+			t.Fatalf("MkdirAll error = %v", err)
+		}
+		blocker := &lockfile.Lock{
+			Name:       lockName,
+			Owner:      "blocker",
+			Host:       "other-host",
+			PID:        99999,
+			AcquiredAt: time.Now(),
+			TTLSec:     30,
+		}
+		if err := lockfile.Write(filepath.Join(locksDir, lockName+".json"), blocker); err != nil {
+			t.Fatalf("Write blocker lock error = %v", err)
+		}
+
+		var wg sync.WaitGroup
+		wins := make(chan int, goroutines)
+
+		for i := 0; i < goroutines; i++ {
+			wg.Add(1)
+			go func(id int) {
+				defer wg.Done()
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				err := AcquireWithWait(ctx, root, lockName, AcquireOptions{TTL: 30 * time.Second})
+				if err == nil {
+					wins <- id
+				}
+			}(i)
+		}
+
+		// Release the blocker after a short delay so waiters can compete
+		go func() {
+			time.Sleep(100 * time.Millisecond)
+			_ = Release(root, lockName, ReleaseOptions{Force: true})
+		}()
+
+		wg.Wait()
+		close(wins)
+
+		// All goroutines share the same process owner, so once the blocker
+		// is released, the first to acquire wins via O_EXCL and the rest
+		// succeed via reentrant refresh. This validates that AcquireWithWait
+		// polling correctly retries and that no goroutines leak or deadlock
+		// under heavy contention.
+		winCount := 0
+		for range wins {
+			winCount++
+		}
+
+		if winCount == 0 {
+			t.Errorf("Round %d: expected at least 1 winner, got 0", round)
+		}
+
+		// Clean up for next round
+		_ = Release(root, lockName, ReleaseOptions{Force: true})
 	}
 }
 
