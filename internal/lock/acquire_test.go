@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/nikolasavic/lokt/internal/audit"
+	"github.com/nikolasavic/lokt/internal/identity"
 	"github.com/nikolasavic/lokt/internal/lockfile"
 )
 
@@ -63,16 +64,26 @@ func TestAcquireWithTTL(t *testing.T) {
 func TestAcquireContention(t *testing.T) {
 	root := t.TempDir()
 
-	// First acquire succeeds
-	err := Acquire(root, "contested", AcquireOptions{})
-	if err != nil {
-		t.Fatalf("First Acquire() error = %v", err)
+	// Create a lock held by a different owner
+	locksDir := filepath.Join(root, "locks")
+	if err := os.MkdirAll(locksDir, 0750); err != nil {
+		t.Fatalf("MkdirAll error = %v", err)
+	}
+	otherLock := &lockfile.Lock{
+		Name:       "contested",
+		Owner:      "other-owner",
+		Host:       "other-host",
+		PID:        99999,
+		AcquiredAt: time.Now(),
+	}
+	if err := lockfile.Write(filepath.Join(locksDir, "contested.json"), otherLock); err != nil {
+		t.Fatalf("Write lock error = %v", err)
 	}
 
-	// Second acquire fails with HeldError
-	err = Acquire(root, "contested", AcquireOptions{})
+	// Acquire from current process (different owner) fails with HeldError
+	err := Acquire(root, "contested", AcquireOptions{})
 	if err == nil {
-		t.Fatal("Second Acquire() should fail")
+		t.Fatal("Acquire() should fail when held by different owner")
 	}
 
 	var held *HeldError
@@ -162,21 +173,31 @@ func TestAcquireWithWait_WaitsForRelease(t *testing.T) {
 	root := t.TempDir()
 	ctx := context.Background()
 
-	// First acquire the lock
-	err := Acquire(root, "wait-test", AcquireOptions{})
-	if err != nil {
-		t.Fatalf("Initial Acquire() error = %v", err)
+	// Create a lock held by a different owner
+	locksDir := filepath.Join(root, "locks")
+	if err := os.MkdirAll(locksDir, 0750); err != nil {
+		t.Fatalf("MkdirAll error = %v", err)
+	}
+	otherLock := &lockfile.Lock{
+		Name:       "wait-test",
+		Owner:      "other-owner",
+		Host:       "other-host",
+		PID:        99999,
+		AcquiredAt: time.Now(),
+	}
+	if err := lockfile.Write(filepath.Join(locksDir, "wait-test.json"), otherLock); err != nil {
+		t.Fatalf("Write lock error = %v", err)
 	}
 
 	// Start a goroutine that releases the lock after a short delay
 	go func() {
 		time.Sleep(150 * time.Millisecond)
-		_ = Release(root, "wait-test", ReleaseOptions{})
+		_ = Release(root, "wait-test", ReleaseOptions{Force: true})
 	}()
 
 	// AcquireWithWait should succeed after the lock is released
 	start := time.Now()
-	err = AcquireWithWait(ctx, root, "wait-test", AcquireOptions{})
+	err := AcquireWithWait(ctx, root, "wait-test", AcquireOptions{})
 	elapsed := time.Since(start)
 
 	if err != nil {
@@ -192,10 +213,20 @@ func TestAcquireWithWait_WaitsForRelease(t *testing.T) {
 func TestAcquireWithWait_ContextCancellation(t *testing.T) {
 	root := t.TempDir()
 
-	// Acquire lock to create contention
-	err := Acquire(root, "cancel-test", AcquireOptions{})
-	if err != nil {
-		t.Fatalf("Initial Acquire() error = %v", err)
+	// Create a lock held by a different owner to create contention
+	locksDir := filepath.Join(root, "locks")
+	if err := os.MkdirAll(locksDir, 0750); err != nil {
+		t.Fatalf("MkdirAll error = %v", err)
+	}
+	otherLock := &lockfile.Lock{
+		Name:       "cancel-test",
+		Owner:      "other-owner",
+		Host:       "other-host",
+		PID:        99999,
+		AcquiredAt: time.Now(),
+	}
+	if err := lockfile.Write(filepath.Join(locksDir, "cancel-test.json"), otherLock); err != nil {
+		t.Fatalf("Write lock error = %v", err)
 	}
 
 	// Create a context that cancels after a short time
@@ -203,7 +234,7 @@ func TestAcquireWithWait_ContextCancellation(t *testing.T) {
 	defer cancel()
 
 	// AcquireWithWait should return context error
-	err = AcquireWithWait(ctx, root, "cancel-test", AcquireOptions{})
+	err := AcquireWithWait(ctx, root, "cancel-test", AcquireOptions{})
 	if err == nil {
 		t.Fatal("Expected error from context cancellation")
 	}
@@ -412,16 +443,26 @@ func TestAcquireDeniedEmitsAuditEvent(t *testing.T) {
 	root := t.TempDir()
 	auditor := audit.NewWriter(root)
 
-	// First acquire succeeds
-	err := Acquire(root, "deny-test", AcquireOptions{})
-	if err != nil {
-		t.Fatalf("First Acquire() error = %v", err)
+	// Create a lock held by a different owner
+	locksDir := filepath.Join(root, "locks")
+	if err := os.MkdirAll(locksDir, 0750); err != nil {
+		t.Fatalf("MkdirAll error = %v", err)
+	}
+	otherLock := &lockfile.Lock{
+		Name:       "deny-test",
+		Owner:      "other-owner",
+		Host:       "other-host",
+		PID:        99999,
+		AcquiredAt: time.Now(),
+	}
+	if err := lockfile.Write(filepath.Join(locksDir, "deny-test.json"), otherLock); err != nil {
+		t.Fatalf("Write lock error = %v", err)
 	}
 
-	// Second acquire fails and should emit deny event
-	err = Acquire(root, "deny-test", AcquireOptions{Auditor: auditor})
+	// Acquire from current process (different owner) fails and should emit deny event
+	err := Acquire(root, "deny-test", AcquireOptions{Auditor: auditor})
 	if err == nil {
-		t.Fatal("Second Acquire() should fail")
+		t.Fatal("Acquire() should fail when held by different owner")
 	}
 
 	events := readAuditEvents(t, root)
@@ -809,5 +850,259 @@ func TestTryBreakStale_RemovesCorruptedLock(t *testing.T) {
 	// File should be gone
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Error("Corrupted lock file should be deleted")
+	}
+}
+
+// Reentrant acquire tests for lokt-skc
+
+func TestAcquire_ReentrantSameOwner(t *testing.T) {
+	root := t.TempDir()
+
+	// First acquire succeeds
+	err := Acquire(root, "reentrant", AcquireOptions{TTL: 5 * time.Minute})
+	if err != nil {
+		t.Fatalf("First Acquire() error = %v", err)
+	}
+
+	// Read original lock to compare later
+	path := filepath.Join(root, "locks", "reentrant.json")
+	original, err := lockfile.Read(path)
+	if err != nil {
+		t.Fatalf("Read original lock error = %v", err)
+	}
+
+	// Small delay so timestamps differ
+	time.Sleep(10 * time.Millisecond)
+
+	// Second acquire from same owner succeeds (reentrant)
+	err = Acquire(root, "reentrant", AcquireOptions{TTL: 10 * time.Minute})
+	if err != nil {
+		t.Fatalf("Reentrant Acquire() error = %v", err)
+	}
+
+	// Verify lock was refreshed
+	refreshed, err := lockfile.Read(path)
+	if err != nil {
+		t.Fatalf("Read refreshed lock error = %v", err)
+	}
+
+	if refreshed.Owner != original.Owner {
+		t.Errorf("Owner changed: %q -> %q", original.Owner, refreshed.Owner)
+	}
+	if !refreshed.AcquiredAt.After(original.AcquiredAt) {
+		t.Error("AcquiredAt should be refreshed to a newer timestamp")
+	}
+	if refreshed.TTLSec != 600 {
+		t.Errorf("TTLSec = %d, want 600 (new TTL should be applied)", refreshed.TTLSec)
+	}
+	if refreshed.PID != os.Getpid() {
+		t.Errorf("PID = %d, want %d (current process)", refreshed.PID, os.Getpid())
+	}
+}
+
+func TestAcquire_ReentrantRefreshesTTL(t *testing.T) {
+	root := t.TempDir()
+
+	// Acquire with 5-minute TTL
+	err := Acquire(root, "ttl-refresh", AcquireOptions{TTL: 5 * time.Minute})
+	if err != nil {
+		t.Fatalf("First Acquire() error = %v", err)
+	}
+
+	// Re-acquire with 10-minute TTL
+	err = Acquire(root, "ttl-refresh", AcquireOptions{TTL: 10 * time.Minute})
+	if err != nil {
+		t.Fatalf("Reentrant Acquire() error = %v", err)
+	}
+
+	path := filepath.Join(root, "locks", "ttl-refresh.json")
+	lock, err := lockfile.Read(path)
+	if err != nil {
+		t.Fatalf("Read lock error = %v", err)
+	}
+
+	if lock.TTLSec != 600 {
+		t.Errorf("TTLSec = %d, want 600", lock.TTLSec)
+	}
+}
+
+func TestAcquire_ReentrantRemovesTTL(t *testing.T) {
+	root := t.TempDir()
+
+	// Acquire with TTL
+	err := Acquire(root, "ttl-remove", AcquireOptions{TTL: 5 * time.Minute})
+	if err != nil {
+		t.Fatalf("First Acquire() error = %v", err)
+	}
+
+	// Re-acquire without TTL
+	err = Acquire(root, "ttl-remove", AcquireOptions{})
+	if err != nil {
+		t.Fatalf("Reentrant Acquire() error = %v", err)
+	}
+
+	path := filepath.Join(root, "locks", "ttl-remove.json")
+	lock, err := lockfile.Read(path)
+	if err != nil {
+		t.Fatalf("Read lock error = %v", err)
+	}
+
+	if lock.TTLSec != 0 {
+		t.Errorf("TTLSec = %d, want 0 (TTL should be removed)", lock.TTLSec)
+	}
+}
+
+func TestAcquire_ReentrantDifferentOwnerDenied(t *testing.T) {
+	root := t.TempDir()
+
+	// Create a lock held by a different owner
+	locksDir := filepath.Join(root, "locks")
+	if err := os.MkdirAll(locksDir, 0750); err != nil {
+		t.Fatalf("MkdirAll error = %v", err)
+	}
+	otherLock := &lockfile.Lock{
+		Name:       "other-owner-test",
+		Owner:      "different-agent",
+		Host:       "other-host",
+		PID:        99999,
+		AcquiredAt: time.Now(),
+		TTLSec:     300,
+	}
+	if err := lockfile.Write(filepath.Join(locksDir, "other-owner-test.json"), otherLock); err != nil {
+		t.Fatalf("Write lock error = %v", err)
+	}
+
+	// Acquire from current process (different owner) should fail
+	err := Acquire(root, "other-owner-test", AcquireOptions{})
+	if err == nil {
+		t.Fatal("Acquire() should fail when held by different owner")
+	}
+
+	var held *HeldError
+	if !errors.As(err, &held) {
+		t.Fatalf("error should be *HeldError, got %T", err)
+	}
+	if held.Lock.Owner != "different-agent" {
+		t.Errorf("HeldError.Lock.Owner = %q, want %q", held.Lock.Owner, "different-agent")
+	}
+}
+
+func TestAcquire_ReentrantExpiredSameOwner(t *testing.T) {
+	root := t.TempDir()
+
+	// Create an expired lock with the same owner as current process
+	locksDir := filepath.Join(root, "locks")
+	if err := os.MkdirAll(locksDir, 0750); err != nil {
+		t.Fatalf("MkdirAll error = %v", err)
+	}
+
+	// Get current identity to match owner
+	id := identity.Current()
+	expiredLock := &lockfile.Lock{
+		Name:       "expired-reentrant",
+		Owner:      id.Owner,
+		Host:       "old-host",
+		PID:        99999,
+		AcquiredAt: time.Now().Add(-10 * time.Minute), // Expired
+		TTLSec:     60,
+	}
+	path := filepath.Join(locksDir, "expired-reentrant.json")
+	if err := lockfile.Write(path, expiredLock); err != nil {
+		t.Fatalf("Write expired lock error = %v", err)
+	}
+
+	// Re-acquire should succeed (same owner, refreshes the expired lock)
+	err := Acquire(root, "expired-reentrant", AcquireOptions{TTL: 5 * time.Minute})
+	if err != nil {
+		t.Fatalf("Reentrant Acquire() of expired lock error = %v", err)
+	}
+
+	// Verify lock is now fresh with current process identity
+	refreshed, err := lockfile.Read(path)
+	if err != nil {
+		t.Fatalf("Read refreshed lock error = %v", err)
+	}
+	if refreshed.Owner != id.Owner {
+		t.Errorf("Owner = %q, want %q", refreshed.Owner, id.Owner)
+	}
+	if refreshed.PID != os.Getpid() {
+		t.Errorf("PID = %d, want %d", refreshed.PID, os.Getpid())
+	}
+	if refreshed.TTLSec != 300 {
+		t.Errorf("TTLSec = %d, want 300", refreshed.TTLSec)
+	}
+	if refreshed.IsExpired() {
+		t.Error("Lock should not be expired after refresh")
+	}
+}
+
+func TestAcquire_ReentrantEmitsRenewAudit(t *testing.T) {
+	root := t.TempDir()
+	auditor := audit.NewWriter(root)
+
+	// First acquire
+	err := Acquire(root, "audit-reentrant", AcquireOptions{Auditor: auditor})
+	if err != nil {
+		t.Fatalf("First Acquire() error = %v", err)
+	}
+
+	// Reentrant acquire
+	err = Acquire(root, "audit-reentrant", AcquireOptions{TTL: 5 * time.Minute, Auditor: auditor})
+	if err != nil {
+		t.Fatalf("Reentrant Acquire() error = %v", err)
+	}
+
+	events := readAuditEvents(t, root)
+	// Should have 2 events: acquire + renew
+	if len(events) != 2 {
+		t.Fatalf("Expected 2 audit events (acquire + renew), got %d", len(events))
+	}
+
+	// First event should be acquire
+	if events[0].Event != audit.EventAcquire {
+		t.Errorf("First event = %q, want %q", events[0].Event, audit.EventAcquire)
+	}
+
+	// Second event should be renew (not acquire)
+	if events[1].Event != audit.EventRenew {
+		t.Errorf("Second event = %q, want %q", events[1].Event, audit.EventRenew)
+	}
+	if events[1].Name != "audit-reentrant" {
+		t.Errorf("Renew event Name = %q, want %q", events[1].Name, "audit-reentrant")
+	}
+}
+
+func TestAcquireWithWait_ReentrantImmediateSuccess(t *testing.T) {
+	root := t.TempDir()
+	ctx := context.Background()
+
+	// First acquire
+	err := Acquire(root, "wait-reentrant", AcquireOptions{TTL: 5 * time.Minute})
+	if err != nil {
+		t.Fatalf("First Acquire() error = %v", err)
+	}
+
+	// AcquireWithWait from same owner should succeed immediately
+	start := time.Now()
+	err = AcquireWithWait(ctx, root, "wait-reentrant", AcquireOptions{TTL: 10 * time.Minute})
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("AcquireWithWait() reentrant error = %v", err)
+	}
+
+	// Should be near-instant (no waiting)
+	if elapsed > 100*time.Millisecond {
+		t.Errorf("Reentrant AcquireWithWait took %v, expected near-instant", elapsed)
+	}
+
+	// Verify TTL was updated
+	path := filepath.Join(root, "locks", "wait-reentrant.json")
+	lock, err := lockfile.Read(path)
+	if err != nil {
+		t.Fatalf("Read lock error = %v", err)
+	}
+	if lock.TTLSec != 600 {
+		t.Errorf("TTLSec = %d, want 600", lock.TTLSec)
 	}
 }

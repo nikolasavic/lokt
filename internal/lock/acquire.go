@@ -97,6 +97,19 @@ func Acquire(rootDir, name string, opts AcquireOptions) error {
 				return &HeldError{Lock: &lockfile.Lock{Name: name}}
 			}
 
+			// Reentrant acquire: same owner refreshes the lock instead of failing.
+			// Owner match is by LOKT_OWNER string only (not PID/host), so the
+			// same agent identity on a different process or host can re-acquire.
+			if existing.Owner == id.Owner {
+				// Overwrite with fresh identity + timestamp + new TTL
+				lock.AcquiredAt = time.Now()
+				if err := lockfile.Write(path, lock); err != nil {
+					return fmt.Errorf("refresh lock file: %w", err)
+				}
+				emitRenewEvent(opts.Auditor, id, name, lock.TTLSec)
+				return nil
+			}
+
 			// Auto-prune: if lock holder is dead (same host only), remove and retry once
 			result := stale.Check(existing)
 			if result.Stale && result.Reason == stale.ReasonDeadPID {
