@@ -51,6 +51,21 @@ COLS="${COLS:-32}"
 NOLOCK="${NOLOCK:-0}"
 LOCKNAME="${LOCKNAME:-demo.hexwall}"
 
+# OPTIONS — enable debug tracing
+# Uncomment to see per-cell trace lines in a debug log file.
+# The log path is printed at startup when enabled.
+# export DEBUG=1
+export DEBUG="${DEBUG:-0}"
+
+# OPTIONS — write a run log for comparing lock vs no-lock
+# Uncomment to write an event log capturing every cell write and
+# whether it was correct. Run both modes, then diff the logs:
+#   HEXWALL_LOGFILE=locked.log   ./lokt-hexwall-demo.sh
+#   HEXWALL_LOGFILE=unlocked.log ./lokt-hexwall-demo.sh --no-lock
+#   diff locked.log unlocked.log
+# export HEXWALL_LOGFILE="hexwall.log"
+export HEXWALL_LOGFILE="${HEXWALL_LOGFILE:-}"
+
 while [ $# -gt 0 ]; do
     case "$1" in
         --workers)  WORKERS="$2"; shift 2 ;;
@@ -113,6 +128,34 @@ STATE_DIR=$(mktemp -d -t hexwall.XXXXXX)
 # Initialize the counter at 0 and create the output file.
 echo 0 > "$STATE_DIR/next"
 touch "$STATE_DIR/out"
+
+if [ "$DEBUG" -eq 1 ]; then
+    echo "debug log: $STATE_DIR/debug.log"
+    echo "(hint: tail -f $STATE_DIR/debug.log in another terminal)"
+fi
+
+if [ -n "$HEXWALL_LOGFILE" ]; then
+    {
+        echo "══════════════════════════════════════════════════"
+        echo "hexwall run log"
+        echo "══════════════════════════════════════════════════"
+        if [ "$NOLOCK" -eq 1 ]; then
+            echo "mode:    NO LOCK — no coordination, races everywhere"
+        else
+            echo "mode:    LOCKED ($LOCKNAME) — lokt guard protects each cell"
+        fi
+        echo "grid:    ${ROWS}x${COLS} ($(( ROWS * COLS )) cells)"
+        echo "workers: $WORKERS"
+        echo "date:    $(date '+%Y-%m-%d %H:%M:%S')"
+        echo ""
+        echo "Each line below is one cell write inside the critical section."
+        echo "Under the lock, every character matches its row label."
+        echo "Without the lock, workers corrupt each other's intermediate"
+        echo "values and the wrong character gets written."
+        echo ""
+        echo "── cell events ───────────────────────────────────"
+    } > "$HEXWALL_LOGFILE"
+fi
 
 # ── Write the critical section script ─────────────────────────────
 # This is the code that runs INSIDE the lock. We write it to a
@@ -193,6 +236,12 @@ col=$(( i % cols ))
 hex_chars="0123456789abcdef"
 label="${hex_chars:$(( row % 16 )):1}"
 
+# OPTIONS — trace cell claims
+# Uncomment to log which cell each invocation claims.
+# if [ "${DEBUG:-0}" -eq 1 ]; then
+#     echo "[cell] pid=$$ i=$i row=$row col=$col label=$label" >> "$state_dir/debug.log"
+# fi
+
 # ── Multi-step computation over shared state ─────────────────
 # Break the character derivation into three intermediate values
 # stored in shared files. The formula:
@@ -222,6 +271,12 @@ echo "$wc" > "$state_dir/work_c"
 # position, and write their own intermediates to the work files.
 echo $(( RANDOM % total )) > "$state_dir/next"
 
+# OPTIONS — widen the race window
+# Uncomment to add a delay between phases. In --no-lock mode this
+# makes corruption nearly guaranteed — other workers overwrite the
+# work files while this one sleeps. No effect in lock mode.
+# sleep 0.05
+
 # Phase 3: Read back the computation results.
 # Under the lock: we read our own values from phase 1.
 # Without the lock: other workers (misdirected by phase 2) have
@@ -235,6 +290,23 @@ rb="${rb//[!0-9]/}"; rb="${rb:-0}"
 rc="${rc//[!0-9]/}"; rc="${rc:-0}"
 
 ch="${hex_chars:$(( (ra + rb + rc) % 16 )):1}"
+
+# OPTIONS — trace computation results
+# Uncomment to see intermediate values and the derived character.
+# In lock mode: a+b+c always cancels to row%16 (clean).
+# In no-lock mode: values come from different workers (noise).
+# if [ "${DEBUG:-0}" -eq 1 ]; then
+#     echo "[calc] pid=$$ a=$ra b=$rb c=$rc -> '$ch' (expect '$label')" >> "$state_dir/debug.log"
+# fi
+
+# Run log: record each cell write with ok/WRONG verdict.
+if [ -n "${HEXWALL_LOGFILE:-}" ]; then
+    if [ "$ch" = "$label" ]; then
+        echo "worker:$$ cell[$row,$col] wrote '$ch' expected '$label' ok" >> "${HEXWALL_LOGFILE}"
+    else
+        echo "worker:$$ cell[$row,$col] wrote '$ch' expected '$label' WRONG" >> "${HEXWALL_LOGFILE}"
+    fi
+fi
 
 # Phase 4: Write the character to the row buffer.
 row_file="$state_dir/row_$(printf '%04d' "$row")"
@@ -254,8 +326,24 @@ if [ "$buf_size" -ge "$cols" ]; then
     if mkdir "$state_dir/done_$(printf '%04d' "$row")" 2>/dev/null; then
         content=$(head -c "$cols" "$row_file")
         printf "%s | %s\n" "$label" "$content" >> "$out_file"
+        # Run log: row summary with corruption count.
+        if [ -n "${HEXWALL_LOGFILE:-}" ]; then
+            right_chars=$(printf '%s' "$content" | tr -cd "$label")
+            wrong_n=$(( ${#content} - ${#right_chars} ))
+            if [ "$wrong_n" -eq 0 ]; then
+                echo "  >> row $row complete: \"$content\" — clean" >> "${HEXWALL_LOGFILE}"
+            else
+                echo "  >> row $row complete: \"$content\" — $wrong_n/$cols wrong" >> "${HEXWALL_LOGFILE}"
+            fi
+        fi
     fi
 fi
+
+# OPTIONS — trace row completion
+# Uncomment to see when each row is flushed and its buffer size.
+# if [ "${DEBUG:-0}" -eq 1 ] && [ "$buf_size" -ge "$cols" ]; then
+#     echo "[flush] row=$row buf=$buf_size chars" >> "$state_dir/debug.log"
+# fi
 
 # Phase 5: Finalize — restore counter to correct next value.
 echo $(( i + 1 )) > "$state_dir/next"
@@ -365,6 +453,9 @@ worker() {
                 bash "$STATE_DIR/critical.sh" \
                 "$STATE_DIR" "$STATE_DIR/out" \
                 "$COLS" "$ROWS" 2>/dev/null || true
+            # OPTIONS — show lock contention
+            # Replace 2>/dev/null above with 2>&1 to watch lokt's
+            # "lock held by..." denial messages scroll past in real time.
         fi
 
         # Quick exit check: are all positions filled? This read is racy
@@ -381,6 +472,11 @@ worker() {
         # Tiny sleep to avoid busy-spinning on the lock file.
         # 1ms is enough to let other workers get scheduled.
         sleep 0.001
+        # OPTIONS — tune worker spin rate
+        # Uncomment one of these instead of the sleep above:
+        # sleep 0.01   # 10ms — gentler on CPU, still fast
+        # sleep 0.1    # 100ms — very slow, watch cells arrive one by one
+        # sleep 0      # no delay — maximum contention and CPU usage
     done
 }
 
@@ -413,6 +509,15 @@ while [ "$r" -lt "$ROWS" ]; do
         label="${hex_chars:$(( r % 16 )):1}"
         content=$(head -c "$COLS" "$STATE_DIR/row_$row_pad")
         printf "%s | %s\n" "$label" "$content" >> "$STATE_DIR/out"
+        if [ -n "$HEXWALL_LOGFILE" ]; then
+            right_chars=$(printf '%s' "$content" | tr -cd "$label")
+            wrong_n=$(( ${#content} - ${#right_chars} ))
+            if [ "$wrong_n" -eq 0 ]; then
+                echo "  >> row $r late-flush: \"$content\" — clean" >> "$HEXWALL_LOGFILE"
+            else
+                echo "  >> row $r late-flush: \"$content\" — $wrong_n/$COLS wrong" >> "$HEXWALL_LOGFILE"
+            fi
+        fi
     fi
     r=$(( r + 1 ))
 done
@@ -429,6 +534,49 @@ if [ -n "$TAIL_PID" ] && kill -0 "$TAIL_PID" 2>/dev/null; then
     wait "$TAIL_PID" 2>/dev/null || true
 fi
 TAIL_PID=""
+
+if [ -n "$HEXWALL_LOGFILE" ]; then
+    {
+        echo ""
+        echo "── results ─────────────────────────────────────"
+        ok_n=$(grep -c ' ok$' "$HEXWALL_LOGFILE" 2>/dev/null || true)
+        wrong_n=$(grep -c ' WRONG$' "$HEXWALL_LOGFILE" 2>/dev/null || true)
+        ok_n="${ok_n:-0}"; ok_n="${ok_n// /}"
+        wrong_n="${wrong_n:-0}"; wrong_n="${wrong_n// /}"
+        total_n=$(( ok_n + wrong_n ))
+        expected=$(( ROWS * COLS ))
+        echo "cells written: $total_n (expected $expected)"
+        echo "correct:       $ok_n"
+        echo "wrong:         $wrong_n"
+        if [ "$total_n" -gt 0 ]; then
+            if [ "$wrong_n" -eq 0 ]; then
+                if [ "$NOLOCK" -eq 1 ]; then
+                    echo ""
+                    echo "verdict: CLEAN — got lucky. Races happened but didn't"
+                    echo "         corrupt the output this time. Run again."
+                else
+                    echo ""
+                    echo "verdict: CLEAN — every cell got the right character."
+                    echo "         The lock held. No worker saw stale state."
+                fi
+            else
+                pct=$(( wrong_n * 100 / total_n ))
+                if [ "$NOLOCK" -eq 1 ]; then
+                    echo ""
+                    echo "verdict: CORRUPTED — $pct% of cells got the wrong character."
+                    echo "         Without a lock, workers overwrote each other's"
+                    echo "         intermediate values. The shared computation broke."
+                else
+                    echo ""
+                    echo "verdict: CORRUPTED — $pct% of cells got the wrong character"
+                    echo "         despite locking. Check for stale locks or TTL expiry."
+                fi
+            fi
+        fi
+        echo "elapsed:       ${SECONDS}s"
+    } >> "$HEXWALL_LOGFILE"
+    echo "run log: $HEXWALL_LOGFILE"
+fi
 
 echo ""
 if [ "$NOLOCK" -eq 1 ]; then
