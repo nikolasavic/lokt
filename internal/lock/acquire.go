@@ -69,6 +69,8 @@ func Acquire(rootDir, name string, opts AcquireOptions) error {
 	}
 	if opts.TTL > 0 {
 		lock.TTLSec = int(opts.TTL.Seconds())
+		exp := lock.AcquiredAt.Add(time.Duration(lock.TTLSec) * time.Second)
+		lock.ExpiresAt = &exp
 	}
 
 	// Try atomic create - fails if file exists
@@ -108,6 +110,10 @@ func Acquire(rootDir, name string, opts AcquireOptions) error {
 			if existing.Owner == id.Owner {
 				// Overwrite with fresh identity + timestamp + new TTL
 				lock.AcquiredAt = time.Now()
+				if lock.TTLSec > 0 {
+					exp := lock.AcquiredAt.Add(time.Duration(lock.TTLSec) * time.Second)
+					lock.ExpiresAt = &exp
+				}
 				if err := lockfile.Write(path, lock); err != nil {
 					return fmt.Errorf("refresh lock file: %w", err)
 				}

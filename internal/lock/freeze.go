@@ -27,11 +27,8 @@ type FrozenError struct {
 func (e *FrozenError) Error() string {
 	age := time.Since(e.Lock.AcquiredAt).Truncate(time.Second)
 	remaining := ""
-	if e.Lock.TTLSec > 0 {
-		rem := time.Duration(e.Lock.TTLSec)*time.Second - e.Lock.Age()
-		if rem > 0 {
-			remaining = fmt.Sprintf(", %s remaining", rem.Truncate(time.Second))
-		}
+	if rem := e.Lock.Remaining(); rem > 0 {
+		remaining = fmt.Sprintf(", %s remaining", rem.Truncate(time.Second))
 	}
 	return fmt.Sprintf("operation %q frozen by %s@%s for %s%s",
 		e.Lock.Name[len(FreezePrefix):], e.Lock.Owner, e.Lock.Host, age, remaining)
@@ -67,14 +64,18 @@ func Freeze(rootDir, name string, opts FreezeOptions) error {
 	path := root.LockFilePath(rootDir, freezeName)
 	id := identity.Current()
 
+	now := time.Now()
+	ttlSec := int(opts.TTL.Seconds())
+	exp := now.Add(time.Duration(ttlSec) * time.Second)
 	lock := &lockfile.Lock{
 		Version:    lockfile.CurrentLockfileVersion,
 		Name:       freezeName,
 		Owner:      id.Owner,
 		Host:       id.Host,
 		PID:        id.PID,
-		AcquiredAt: time.Now(),
-		TTLSec:     int(opts.TTL.Seconds()),
+		AcquiredAt: now,
+		TTLSec:     ttlSec,
+		ExpiresAt:  &exp,
 	}
 	if startNS, err := stale.GetProcessStartTime(id.PID); err == nil {
 		lock.PIDStartNS = startNS

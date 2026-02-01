@@ -164,8 +164,10 @@ Lock files are stored in a Lokt root directory, resolved in order:
 ### Lockfile Protocol
 Locks are JSON files in `<root>/locks/<name>.json`:
 ```json
-{"name":"...", "owner":"...", "host":"...", "pid":123, "acquired_ts":"...", "ttl_sec":300}
+{"version":1, "name":"...", "owner":"...", "host":"...", "pid":123, "acquired_ts":"...", "ttl_sec":300, "expires_at":"..."}
 ```
+
+Fields: `version` (always 1), `name`, `owner`, `host`, `pid`, `pid_start_ns` (omitempty), `acquired_ts` (RFC3339), `ttl_sec` (omitempty, 0 = no expiry), `expires_at` (omitempty, computed as `acquired_ts + ttl_sec` at write time).
 
 Acquisition uses `O_CREATE|O_EXCL` for atomic create-or-fail semantics with `fsync` for durability.
 
@@ -176,7 +178,11 @@ Acquisition uses `O_CREATE|O_EXCL` for atomic create-or-fail semantics with `fsy
 - `lokt guard <name> -- <cmd...>` - Acquire, exec child, release on exit (propagate exit code)
 
 ### TTL & Staleness
-Locks have optional TTL. Expired locks can be broken with `--break-stale`. On Unix, PID liveness (`kill(pid, 0)`) helps detect stale locks from crashed processes.
+Locks have optional TTL. When TTL is set, `expires_at` is computed at write time and stored in the lockfile. Expiry checks use the explicit `expires_at` timestamp (`time.Now().After(expires_at)`) when present, falling back to `acquired_ts + ttl_sec` arithmetic for old lockfiles.
+
+Expired locks can be broken with `--break-stale`. On Unix, PID liveness (`kill(pid, 0)`) helps detect stale locks from crashed processes.
+
+**Clock skew and monotonic time**: The `expires_at` and `acquired_ts` fields use wall-clock time (RFC3339). Within a single Go process, `time.Since()` uses the monotonic clock component and is safe from NTP adjustments. However, cross-process stale detection compares deserialized wall-clock values and is susceptible to NTP jumps or clock skew between hosts. This is an inherent limitation of file-based coordination. Mitigations: PID liveness detection catches crashed processes on the same host; guard heartbeat renewal (`TTL/2` interval) keeps live locks fresh; `--wait` retries with backoff until the lock becomes available.
 
 ### Freeze Switch
 `lokt freeze <name>` creates a special lock that blocks all `guard` commands for that name until `unfreeze` or TTL expiry.

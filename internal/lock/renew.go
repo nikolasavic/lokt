@@ -39,6 +39,10 @@ func Renew(rootDir, name string, opts RenewOptions) error {
 	// Update timestamp and version, then rewrite atomically
 	existing.Version = lockfile.CurrentLockfileVersion
 	existing.AcquiredAt = time.Now()
+	if existing.TTLSec > 0 {
+		exp := existing.AcquiredAt.Add(time.Duration(existing.TTLSec) * time.Second)
+		existing.ExpiresAt = &exp
+	}
 	if err := lockfile.Write(path, existing); err != nil {
 		return fmt.Errorf("write lock: %w", err)
 	}

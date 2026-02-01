@@ -17,22 +17,48 @@ const CurrentLockfileVersion = 1
 
 // Lock represents the JSON structure of a lock file.
 type Lock struct {
-	Version    int       `json:"version"`
-	Name       string    `json:"name"`
-	Owner      string    `json:"owner"`
-	Host       string    `json:"host"`
-	PID        int       `json:"pid"`
-	PIDStartNS int64     `json:"pid_start_ns,omitempty"`
-	AcquiredAt time.Time `json:"acquired_ts"`
-	TTLSec     int       `json:"ttl_sec,omitempty"`
+	Version    int        `json:"version"`
+	Name       string     `json:"name"`
+	Owner      string     `json:"owner"`
+	Host       string     `json:"host"`
+	PID        int        `json:"pid"`
+	PIDStartNS int64      `json:"pid_start_ns,omitempty"`
+	AcquiredAt time.Time  `json:"acquired_ts"`
+	TTLSec     int        `json:"ttl_sec,omitempty"`
+	ExpiresAt  *time.Time `json:"expires_at,omitempty"`
 }
 
 // IsExpired returns true if the lock has a TTL and it has elapsed.
+// Prefers the explicit ExpiresAt timestamp when present; falls back to
+// TTLSec arithmetic for lockfiles written before the expires_at field existed.
 func (l *Lock) IsExpired() bool {
+	if l.ExpiresAt != nil {
+		return time.Now().After(*l.ExpiresAt)
+	}
 	if l.TTLSec <= 0 {
 		return false
 	}
 	return time.Since(l.AcquiredAt) > time.Duration(l.TTLSec)*time.Second
+}
+
+// Remaining returns the duration until the lock expires.
+// Returns zero if the lock has no TTL, is already expired, or has no expiry info.
+func (l *Lock) Remaining() time.Duration {
+	if l.ExpiresAt != nil {
+		rem := time.Until(*l.ExpiresAt)
+		if rem < 0 {
+			return 0
+		}
+		return rem
+	}
+	if l.TTLSec <= 0 {
+		return 0
+	}
+	rem := time.Duration(l.TTLSec)*time.Second - time.Since(l.AcquiredAt)
+	if rem < 0 {
+		return 0
+	}
+	return rem
 }
 
 // Age returns the duration since the lock was acquired.

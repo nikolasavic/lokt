@@ -459,3 +459,188 @@ func indexOf(s, substr string) int {
 	}
 	return -1
 }
+
+func timePtr(t time.Time) *time.Time { return &t }
+
+func TestWriteAndRead_ExpiresAt(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.lock")
+
+	exp := time.Now().Add(5 * time.Minute).Truncate(time.Millisecond)
+	lock := &Lock{
+		Version:    CurrentLockfileVersion,
+		Name:       "test",
+		Owner:      "testuser",
+		Host:       "testhost",
+		PID:        12345,
+		AcquiredAt: time.Now().Truncate(time.Millisecond),
+		TTLSec:     300,
+		ExpiresAt:  &exp,
+	}
+
+	if err := Write(path, lock); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+
+	got, err := Read(path)
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+
+	if got.ExpiresAt == nil {
+		t.Fatal("ExpiresAt should not be nil")
+	}
+	if !got.ExpiresAt.Equal(exp) {
+		t.Errorf("ExpiresAt = %v, want %v", *got.ExpiresAt, exp)
+	}
+}
+
+func TestWriteOmitsExpiresAt_WhenNil(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "nottl.lock")
+
+	lock := &Lock{
+		Version:    CurrentLockfileVersion,
+		Name:       "test",
+		Owner:      "testuser",
+		Host:       "testhost",
+		PID:        12345,
+		AcquiredAt: time.Now().Truncate(time.Millisecond),
+	}
+
+	if err := Write(path, lock); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+
+	if _, exists := raw["expires_at"]; exists {
+		t.Error("expires_at should be omitted when nil (omitempty)")
+	}
+}
+
+func TestRead_BackwardCompat_NoExpiresAt(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "old.lock")
+
+	oldJSON := `{
+  "version": 1,
+  "name": "test",
+  "owner": "testuser",
+  "host": "testhost",
+  "pid": 12345,
+  "acquired_ts": "2026-01-28T10:00:00Z",
+  "ttl_sec": 300
+}`
+	if err := os.WriteFile(path, []byte(oldJSON), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := Read(path)
+	if err != nil {
+		t.Fatalf("Read() should accept lockfile without expires_at, got error: %v", err)
+	}
+
+	if got.ExpiresAt != nil {
+		t.Errorf("ExpiresAt should be nil for old lockfile, got %v", *got.ExpiresAt)
+	}
+	if got.TTLSec != 300 {
+		t.Errorf("TTLSec = %d, want 300", got.TTLSec)
+	}
+}
+
+func TestIsExpired_WithExpiresAt(t *testing.T) {
+	tests := []struct {
+		name     string
+		lock     Lock
+		expected bool
+	}{
+		{
+			name:     "expires_at in future",
+			lock:     Lock{ExpiresAt: timePtr(time.Now().Add(5 * time.Minute))},
+			expected: false,
+		},
+		{
+			name:     "expires_at in past",
+			lock:     Lock{ExpiresAt: timePtr(time.Now().Add(-1 * time.Second))},
+			expected: true,
+		},
+		{
+			name:     "nil expires_at with TTL not expired",
+			lock:     Lock{TTLSec: 3600, AcquiredAt: time.Now()},
+			expected: false,
+		},
+		{
+			name:     "nil expires_at with TTL expired",
+			lock:     Lock{TTLSec: 1, AcquiredAt: time.Now().Add(-2 * time.Second)},
+			expected: true,
+		},
+		{
+			name:     "nil expires_at no TTL",
+			lock:     Lock{},
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.lock.IsExpired(); got != tt.expected {
+				t.Errorf("IsExpired() = %v, want %v", got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestRemaining(t *testing.T) {
+	tests := []struct {
+		name         string
+		lock         Lock
+		wantPositive bool
+	}{
+		{
+			name:         "expires_at in future",
+			lock:         Lock{ExpiresAt: timePtr(time.Now().Add(5 * time.Minute))},
+			wantPositive: true,
+		},
+		{
+			name:         "expires_at in past",
+			lock:         Lock{ExpiresAt: timePtr(time.Now().Add(-1 * time.Second))},
+			wantPositive: false,
+		},
+		{
+			name:         "no expires_at with TTL not expired",
+			lock:         Lock{TTLSec: 3600, AcquiredAt: time.Now()},
+			wantPositive: true,
+		},
+		{
+			name:         "no expires_at TTL expired",
+			lock:         Lock{TTLSec: 1, AcquiredAt: time.Now().Add(-2 * time.Second)},
+			wantPositive: false,
+		},
+		{
+			name:         "no TTL at all",
+			lock:         Lock{},
+			wantPositive: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rem := tt.lock.Remaining()
+			if tt.wantPositive && rem <= 0 {
+				t.Errorf("Remaining() = %v, want positive", rem)
+			}
+			if !tt.wantPositive && rem != 0 {
+				t.Errorf("Remaining() = %v, want 0", rem)
+			}
+		})
+	}
+}

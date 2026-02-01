@@ -266,6 +266,7 @@ type lockDenyOutput struct {
 	HolderExpired    bool   `json:"holder_expired,omitempty"`
 	HolderPIDStatus  string `json:"holder_pid_status,omitempty"`
 	HolderAcquiredTS string `json:"holder_acquired_ts,omitempty"`
+	HolderExpiresAt  string `json:"holder_expires_at,omitempty"`
 }
 
 // lockAcquireOutput is the JSON structure for lock --json success output.
@@ -287,11 +288,13 @@ func printLockDenyJSONFromLock(lk *lockfile.Lock) {
 		out.HolderAcquiredTS = lk.AcquiredAt.Format(time.RFC3339)
 		out.HolderAgeSec = int(time.Since(lk.AcquiredAt).Seconds())
 		out.HolderExpired = lk.IsExpired()
+		if lk.ExpiresAt != nil {
+			out.HolderExpiresAt = lk.ExpiresAt.Format(time.RFC3339)
+		}
 		if lk.TTLSec > 0 {
 			out.HolderTTLSec = lk.TTLSec
-			remain := time.Duration(lk.TTLSec)*time.Second - time.Since(lk.AcquiredAt)
-			if remain > 0 {
-				out.HolderRemainSec = int(remain.Seconds())
+			if rem := lk.Remaining(); rem > 0 {
+				out.HolderRemainSec = int(rem.Seconds())
 			}
 		}
 		out.HolderPIDStatus = pidLivenessFromLock(lk)
@@ -318,11 +321,13 @@ func printLockDenyJSON(name string, lf *lockFile) {
 		HolderAgeSec:     int(time.Since(lf.AcquiredAt).Seconds()),
 		HolderExpired:    lf.IsExpired(),
 	}
+	if lf.ExpiresAt != nil {
+		out.HolderExpiresAt = lf.ExpiresAt.Format(time.RFC3339)
+	}
 	if lf.TTLSec > 0 {
 		out.HolderTTLSec = lf.TTLSec
-		remain := time.Duration(lf.TTLSec)*time.Second - time.Since(lf.AcquiredAt)
-		if remain > 0 {
-			out.HolderRemainSec = int(remain.Seconds())
+		if rem := lf.remaining(); rem > 0 {
+			out.HolderRemainSec = int(rem.Seconds())
 		}
 	}
 	out.HolderPIDStatus = pidLiveness(lf)
@@ -787,7 +792,13 @@ func showLock(rootDir, name string, jsonOutput bool) int {
 	fmt.Printf("age:      %s\n", age)
 	if lf.TTLSec > 0 {
 		fmt.Printf("ttl:      %ds\n", lf.TTLSec)
-		if lf.IsExpired() {
+		if lf.ExpiresAt != nil {
+			if lf.IsExpired() {
+				fmt.Printf("expires:  %s (EXPIRED)\n", lf.ExpiresAt.Format(time.RFC3339))
+			} else {
+				fmt.Printf("expires:  %s (in %s)\n", lf.ExpiresAt.Format(time.RFC3339), lf.remaining().Truncate(time.Second))
+			}
+		} else if lf.IsExpired() {
 			fmt.Println("status:   EXPIRED")
 		}
 	}
@@ -881,14 +892,15 @@ func readLockFile(path string) (*lockFile, error) {
 }
 
 type lockFile struct {
-	Version    int       `json:"version"`
-	Name       string    `json:"name"`
-	Owner      string    `json:"owner"`
-	Host       string    `json:"host"`
-	PID        int       `json:"pid"`
-	PIDStartNS int64     `json:"pid_start_ns,omitempty"`
-	AcquiredAt time.Time `json:"acquired_ts"`
-	TTLSec     int       `json:"ttl_sec,omitempty"`
+	Version    int        `json:"version"`
+	Name       string     `json:"name"`
+	Owner      string     `json:"owner"`
+	Host       string     `json:"host"`
+	PID        int        `json:"pid"`
+	PIDStartNS int64      `json:"pid_start_ns,omitempty"`
+	AcquiredAt time.Time  `json:"acquired_ts"`
+	TTLSec     int        `json:"ttl_sec,omitempty"`
+	ExpiresAt  *time.Time `json:"expires_at,omitempty"`
 }
 
 // statusOutput is the JSON structure for status --json output.
@@ -901,6 +913,7 @@ type statusOutput struct {
 	PIDStartNS int64  `json:"pid_start_ns,omitempty"`
 	AcquiredAt string `json:"acquired_ts"`
 	TTLSec     int    `json:"ttl_sec,omitempty"`
+	ExpiresAt  string `json:"expires_at,omitempty"`
 	AgeSec     int    `json:"age_sec"`
 	Expired    bool   `json:"expired"`
 	PIDStatus  string `json:"pid_status"`
@@ -921,6 +934,9 @@ func lockToStatusOutput(lf *lockFile) statusOutput {
 		Expired:    lf.IsExpired(),
 		PIDStatus:  pidLiveness(lf),
 	}
+	if lf.ExpiresAt != nil {
+		out.ExpiresAt = lf.ExpiresAt.Format(time.RFC3339)
+	}
 	if lock.IsFreezeLock(lf.Name) {
 		out.Freeze = true
 	}
@@ -928,10 +944,31 @@ func lockToStatusOutput(lf *lockFile) statusOutput {
 }
 
 func (l *lockFile) IsExpired() bool {
+	if l.ExpiresAt != nil {
+		return time.Now().After(*l.ExpiresAt)
+	}
 	if l.TTLSec <= 0 {
 		return false
 	}
 	return time.Since(l.AcquiredAt) > time.Duration(l.TTLSec)*time.Second
+}
+
+func (l *lockFile) remaining() time.Duration {
+	if l.ExpiresAt != nil {
+		rem := time.Until(*l.ExpiresAt)
+		if rem < 0 {
+			return 0
+		}
+		return rem
+	}
+	if l.TTLSec <= 0 {
+		return 0
+	}
+	rem := time.Duration(l.TTLSec)*time.Second - time.Since(l.AcquiredAt)
+	if rem < 0 {
+		return 0
+	}
+	return rem
 }
 
 func parseJSON(data []byte, v interface{}) error {
@@ -1357,10 +1394,7 @@ func cmdWhy(args []string) int {
 	freezeLock, freezeErr := lockfile.Read(freezePath)
 	if freezeErr == nil && !freezeLock.IsExpired() {
 		age := freezeLock.Age().Truncate(time.Second)
-		remaining := time.Duration(freezeLock.TTLSec)*time.Second - age
-		if remaining < 0 {
-			remaining = 0
-		}
+		remaining := freezeLock.Remaining()
 
 		reasons = append(reasons, whyReason{
 			Type:               "frozen",
@@ -1455,11 +1489,7 @@ func cmdWhy(args []string) int {
 			}
 
 			if lf.TTLSec > 0 {
-				remaining := time.Duration(lf.TTLSec)*time.Second - lf.Age()
-				if remaining < 0 {
-					remaining = 0
-				}
-				reason.HolderRemainSec = int(remaining.Seconds())
+				reason.HolderRemainSec = int(lf.Remaining().Seconds())
 			}
 
 			switch {
