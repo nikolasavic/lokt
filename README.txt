@@ -136,7 +136,7 @@ EXAMPLES
   # serialize terraform apply
   lokt guard tf-apply --ttl 60m -- terraform apply -auto-approve
 
-  # wait for a busy lock (with 10 minute timeout)
+  # wait up to 10 minutes if lock is already held
   lokt guard release --ttl 30m --wait --timeout 10m -- ./cut_release.sh
 
   # stop deploys for 15 minutes (incident / focus window)
