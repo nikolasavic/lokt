@@ -482,21 +482,6 @@ func cmdStatus(args []string) int {
 		return ExitError
 	}
 
-	locksDir := root.LocksPath(rootDir)
-	entries, err := os.ReadDir(locksDir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			if *jsonOutput {
-				fmt.Println("[]")
-			} else {
-				fmt.Println("no locks")
-			}
-			return ExitOK
-		}
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		return ExitError
-	}
-
 	// If a specific lock name given, show just that one
 	if fs.NArg() > 0 {
 		name := fs.Arg(0)
@@ -506,8 +491,15 @@ func cmdStatus(args []string) int {
 		return showLock(rootDir, name, *jsonOutput)
 	}
 
-	// List all locks
-	if len(entries) == 0 {
+	// Scan locks/ directory
+	locksDir := root.LocksPath(rootDir)
+	lockEntries, _ := os.ReadDir(locksDir)
+
+	// Scan freezes/ directory
+	freezesDir := root.FreezesPath(rootDir)
+	freezeEntries, _ := os.ReadDir(freezesDir)
+
+	if len(lockEntries) == 0 && len(freezeEntries) == 0 {
 		if *jsonOutput {
 			fmt.Println("[]")
 		} else {
@@ -518,7 +510,9 @@ func cmdStatus(args []string) int {
 
 	var outputs []statusOutput
 	pruned := 0
-	for _, entry := range entries {
+
+	// List regular locks from locks/
+	for _, entry := range lockEntries {
 		if entry.IsDir() {
 			continue
 		}
@@ -535,10 +529,44 @@ func cmdStatus(args []string) int {
 				path := root.LockFilePath(rootDir, lockName)
 				lf, err := readLockFile(path)
 				if err == nil {
-					outputs = append(outputs, lockToStatusOutput(lf))
+					outputs = append(outputs, lockToStatusOutput(lf, false))
 				}
 			} else {
-				showLockBrief(rootDir, lockName)
+				showLockBrief(rootDir, lockName, false)
+			}
+		}
+	}
+
+	// List freeze locks from freezes/
+	for _, entry := range freezeEntries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if len(name) > 5 && name[len(name)-5:] == ".json" {
+			freezeName := name[:len(name)-5]
+			if *pruneExpired {
+				path := root.FreezeFilePath(rootDir, freezeName)
+				lf, err := readLockFile(path)
+				if err == nil && lf.IsExpired() {
+					if rmErr := os.Remove(path); rmErr == nil || os.IsNotExist(rmErr) {
+						_ = lockfile.SyncDir(path)
+						if !*jsonOutput {
+							fmt.Printf("pruned: %s (expired freeze)\n", freezeName)
+						}
+						pruned++
+						continue
+					}
+				}
+			}
+			if *jsonOutput {
+				path := root.FreezeFilePath(rootDir, freezeName)
+				lf, err := readLockFile(path)
+				if err == nil {
+					outputs = append(outputs, lockToStatusOutput(lf, true))
+				}
+			} else {
+				showLockBrief(rootDir, freezeName, true)
 			}
 		}
 	}
@@ -779,7 +807,7 @@ func showLock(rootDir, name string, jsonOutput bool) int {
 	}
 
 	if jsonOutput {
-		output := lockToStatusOutput(lf)
+		output := lockToStatusOutput(lf, false)
 		data, _ := json.MarshalIndent(output, "", "  ")
 		fmt.Println(string(data))
 		return ExitOK
@@ -806,8 +834,13 @@ func showLock(rootDir, name string, jsonOutput bool) int {
 	return ExitOK
 }
 
-func showLockBrief(rootDir, name string) {
-	path := root.LockFilePath(rootDir, name)
+func showLockBrief(rootDir, name string, isFreeze bool) {
+	var path string
+	if isFreeze {
+		path = root.FreezeFilePath(rootDir, name)
+	} else {
+		path = root.LockFilePath(rootDir, name)
+	}
 	lf, err := readLockFile(path)
 	if err != nil {
 		return
@@ -815,7 +848,7 @@ func showLockBrief(rootDir, name string) {
 
 	age := time.Since(lf.AcquiredAt).Truncate(time.Second)
 	status := ""
-	if strings.HasPrefix(name, lock.FreezePrefix) {
+	if isFreeze || strings.HasPrefix(name, lock.FreezePrefix) {
 		status = " [FROZEN]"
 	}
 	if lf.IsExpired() {
@@ -921,7 +954,7 @@ type statusOutput struct {
 	Freeze     bool   `json:"freeze,omitempty"`
 }
 
-func lockToStatusOutput(lf *lockFile) statusOutput {
+func lockToStatusOutput(lf *lockFile, isFreeze bool) statusOutput {
 	out := statusOutput{
 		Version:    lf.Version,
 		Name:       lf.Name,
@@ -938,7 +971,7 @@ func lockToStatusOutput(lf *lockFile) statusOutput {
 	if lf.ExpiresAt != nil {
 		out.ExpiresAt = lf.ExpiresAt.Format(time.RFC3339)
 	}
-	if strings.HasPrefix(lf.Name, lock.FreezePrefix) {
+	if isFreeze || strings.HasPrefix(lf.Name, lock.FreezePrefix) {
 		out.Freeze = true
 	}
 	return out
@@ -1391,8 +1424,11 @@ func cmdWhy(args []string) int {
 	var suggestions []string
 
 	// Check freeze (read-only — no auto-prune, no audit)
-	freezePath := root.LockFilePath(rootDir, lock.FreezePrefix+name)
-	freezeLock, freezeErr := lockfile.Read(freezePath)
+	// Try new location first, then fall back to legacy
+	freezeLock, freezeErr := lockfile.Read(root.FreezeFilePath(rootDir, name))
+	if os.IsNotExist(freezeErr) {
+		freezeLock, freezeErr = lockfile.Read(root.LockFilePath(rootDir, lock.FreezePrefix+name))
+	}
 	if freezeErr == nil && !freezeLock.IsExpired() {
 		age := freezeLock.Age().Truncate(time.Second)
 		remaining := freezeLock.Remaining()
