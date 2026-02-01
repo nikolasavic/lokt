@@ -19,21 +19,27 @@ func TestFreeze(t *testing.T) {
 		t.Fatalf("Freeze() error = %v", err)
 	}
 
-	// Verify freeze lock file exists with correct naming
-	path := filepath.Join(root, "locks", "freeze-deploy.json")
+	// Verify freeze file exists in freezes/ directory with clean name
+	path := filepath.Join(root, "freezes", "deploy.json")
 	lf, err := lockfile.Read(path)
 	if err != nil {
 		t.Fatalf("Read freeze lock error = %v", err)
 	}
 
-	if lf.Name != "freeze-deploy" {
-		t.Errorf("Name = %q, want %q", lf.Name, "freeze-deploy")
+	if lf.Name != "deploy" {
+		t.Errorf("Name = %q, want %q", lf.Name, "deploy")
 	}
 	if lf.TTLSec != 900 {
 		t.Errorf("TTLSec = %d, want 900", lf.TTLSec)
 	}
 	if lf.Owner == "" {
 		t.Error("Owner should not be empty")
+	}
+
+	// Verify nothing was written to the legacy location
+	legacyPath := filepath.Join(root, "locks", "freeze-deploy.json")
+	if _, err := os.Stat(legacyPath); !os.IsNotExist(err) {
+		t.Error("Should not write to legacy locks/freeze-deploy.json path")
 	}
 }
 
@@ -70,21 +76,25 @@ func TestFreezeContention(t *testing.T) {
 func TestFreezeReplacesExpired(t *testing.T) {
 	root := t.TempDir()
 
-	// Create an expired freeze manually
-	locksDir := filepath.Join(root, "locks")
-	if err := os.MkdirAll(locksDir, 0750); err != nil {
+	// Create an expired freeze manually at new location
+	freezesDir := filepath.Join(root, "freezes")
+	if err := os.MkdirAll(freezesDir, 0750); err != nil {
+		t.Fatalf("MkdirAll error = %v", err)
+	}
+	// Also create locks dir (EnsureDirs creates both)
+	if err := os.MkdirAll(filepath.Join(root, "locks"), 0750); err != nil {
 		t.Fatalf("MkdirAll error = %v", err)
 	}
 
 	expiredFreeze := &lockfile.Lock{
-		Name:       "freeze-deploy",
+		Name:       "deploy",
 		Owner:      "other-owner",
 		Host:       "other-host",
 		PID:        99999,
 		AcquiredAt: time.Now().Add(-30 * time.Minute),
 		TTLSec:     60, // 1 minute TTL = expired
 	}
-	path := filepath.Join(locksDir, "freeze-deploy.json")
+	path := filepath.Join(freezesDir, "deploy.json")
 	if err := lockfile.Write(path, expiredFreeze); err != nil {
 		t.Fatalf("Write expired freeze error = %v", err)
 	}
@@ -120,8 +130,8 @@ func TestUnfreeze(t *testing.T) {
 		t.Fatalf("Unfreeze() error = %v", err)
 	}
 
-	// Verify freeze lock file is gone
-	path := filepath.Join(root, "locks", "freeze-deploy.json")
+	// Verify freeze file is gone from new location
+	path := filepath.Join(root, "freezes", "deploy.json")
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Error("Freeze lock file should be deleted")
 	}
@@ -130,9 +140,11 @@ func TestUnfreeze(t *testing.T) {
 func TestUnfreezeNotFound(t *testing.T) {
 	root := t.TempDir()
 
-	// Ensure locks dir exists
-	locksDir := filepath.Join(root, "locks")
-	if err := os.MkdirAll(locksDir, 0750); err != nil {
+	// Ensure both dirs exist
+	if err := os.MkdirAll(filepath.Join(root, "locks"), 0750); err != nil {
+		t.Fatalf("MkdirAll error = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "freezes"), 0750); err != nil {
 		t.Fatalf("MkdirAll error = %v", err)
 	}
 
@@ -145,21 +157,21 @@ func TestUnfreezeNotFound(t *testing.T) {
 func TestUnfreezeNotOwner(t *testing.T) {
 	root := t.TempDir()
 
-	// Create freeze from different owner
-	locksDir := filepath.Join(root, "locks")
-	if err := os.MkdirAll(locksDir, 0750); err != nil {
+	// Create freeze from different owner in new location
+	freezesDir := filepath.Join(root, "freezes")
+	if err := os.MkdirAll(freezesDir, 0750); err != nil {
 		t.Fatalf("MkdirAll error = %v", err)
 	}
 
 	otherFreeze := &lockfile.Lock{
-		Name:       "freeze-deploy",
+		Name:       "deploy",
 		Owner:      "other-owner",
 		Host:       "other-host",
 		PID:        99999,
 		AcquiredAt: time.Now(),
 		TTLSec:     900,
 	}
-	path := filepath.Join(locksDir, "freeze-deploy.json")
+	path := filepath.Join(freezesDir, "deploy.json")
 	if err := lockfile.Write(path, otherFreeze); err != nil {
 		t.Fatalf("Write other freeze error = %v", err)
 	}
@@ -176,21 +188,21 @@ func TestUnfreezeNotOwner(t *testing.T) {
 func TestUnfreezeForce(t *testing.T) {
 	root := t.TempDir()
 
-	// Create freeze from different owner
-	locksDir := filepath.Join(root, "locks")
-	if err := os.MkdirAll(locksDir, 0750); err != nil {
+	// Create freeze from different owner in new location
+	freezesDir := filepath.Join(root, "freezes")
+	if err := os.MkdirAll(freezesDir, 0750); err != nil {
 		t.Fatalf("MkdirAll error = %v", err)
 	}
 
 	otherFreeze := &lockfile.Lock{
-		Name:       "freeze-deploy",
+		Name:       "deploy",
 		Owner:      "other-owner",
 		Host:       "other-host",
 		PID:        99999,
 		AcquiredAt: time.Now(),
 		TTLSec:     900,
 	}
-	path := filepath.Join(locksDir, "freeze-deploy.json")
+	path := filepath.Join(freezesDir, "deploy.json")
 	if err := lockfile.Write(path, otherFreeze); err != nil {
 		t.Fatalf("Write other freeze error = %v", err)
 	}
@@ -210,9 +222,11 @@ func TestUnfreezeForce(t *testing.T) {
 func TestCheckFreeze_NoFreeze(t *testing.T) {
 	root := t.TempDir()
 
-	// Ensure locks dir exists
-	locksDir := filepath.Join(root, "locks")
-	if err := os.MkdirAll(locksDir, 0750); err != nil {
+	// Ensure both dirs exist
+	if err := os.MkdirAll(filepath.Join(root, "freezes"), 0750); err != nil {
+		t.Fatalf("MkdirAll error = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "locks"), 0750); err != nil {
 		t.Fatalf("MkdirAll error = %v", err)
 	}
 
@@ -250,21 +264,21 @@ func TestCheckFreeze_ActiveFreeze(t *testing.T) {
 func TestCheckFreeze_ExpiredFreeze(t *testing.T) {
 	root := t.TempDir()
 
-	// Create an expired freeze manually
-	locksDir := filepath.Join(root, "locks")
-	if err := os.MkdirAll(locksDir, 0750); err != nil {
+	// Create an expired freeze manually in new location
+	freezesDir := filepath.Join(root, "freezes")
+	if err := os.MkdirAll(freezesDir, 0750); err != nil {
 		t.Fatalf("MkdirAll error = %v", err)
 	}
 
 	expiredFreeze := &lockfile.Lock{
-		Name:       "freeze-deploy",
+		Name:       "deploy",
 		Owner:      "other-owner",
 		Host:       "other-host",
 		PID:        99999,
 		AcquiredAt: time.Now().Add(-30 * time.Minute),
 		TTLSec:     60, // 1 minute TTL = expired
 	}
-	path := filepath.Join(locksDir, "freeze-deploy.json")
+	path := filepath.Join(freezesDir, "deploy.json")
 	if err := lockfile.Write(path, expiredFreeze); err != nil {
 		t.Fatalf("Write expired freeze error = %v", err)
 	}
@@ -289,23 +303,23 @@ func TestCheckFreeze_DeadPIDFreezeStillBlocks(t *testing.T) {
 		t.Skipf("Cannot get hostname: %v", err)
 	}
 
-	// Create a freeze with a dead PID on same host.
+	// Create a freeze with a dead PID on same host in new location.
 	// Unlike regular locks, freeze locks are NOT auto-pruned by dead PID
 	// because the freeze command exits immediately after creating the lock.
-	locksDir := filepath.Join(root, "locks")
-	if err := os.MkdirAll(locksDir, 0750); err != nil {
+	freezesDir := filepath.Join(root, "freezes")
+	if err := os.MkdirAll(freezesDir, 0750); err != nil {
 		t.Fatalf("MkdirAll error = %v", err)
 	}
 
 	deadFreeze := &lockfile.Lock{
-		Name:       "freeze-deploy",
+		Name:       "deploy",
 		Owner:      "dead-process",
 		Host:       hostname,
 		PID:        999999,
 		AcquiredAt: time.Now(),
 		TTLSec:     900,
 	}
-	path := filepath.Join(locksDir, "freeze-deploy.json")
+	path := filepath.Join(freezesDir, "deploy.json")
 	if err := lockfile.Write(path, deadFreeze); err != nil {
 		t.Fatalf("Write dead PID freeze error = %v", err)
 	}
@@ -407,21 +421,21 @@ func TestUnfreezeEmitsAuditEvent(t *testing.T) {
 func TestUnfreezeForceEmitsAuditEvent(t *testing.T) {
 	root := t.TempDir()
 
-	// Create freeze from different owner
-	locksDir := filepath.Join(root, "locks")
-	if err := os.MkdirAll(locksDir, 0750); err != nil {
+	// Create freeze from different owner in new location
+	freezesDir := filepath.Join(root, "freezes")
+	if err := os.MkdirAll(freezesDir, 0750); err != nil {
 		t.Fatalf("MkdirAll error = %v", err)
 	}
 
 	otherFreeze := &lockfile.Lock{
-		Name:       "freeze-deploy",
+		Name:       "deploy",
 		Owner:      "other-owner",
 		Host:       "other-host",
 		PID:        99999,
 		AcquiredAt: time.Now(),
 		TTLSec:     900,
 	}
-	path := filepath.Join(locksDir, "freeze-deploy.json")
+	path := filepath.Join(freezesDir, "deploy.json")
 	if err := lockfile.Write(path, otherFreeze); err != nil {
 		t.Fatalf("Write other freeze error = %v", err)
 	}
@@ -489,9 +503,10 @@ func TestFreezeValidatesName(t *testing.T) {
 }
 
 func TestFrozenErrorMessage(t *testing.T) {
+	// Test with new-style clean name
 	err := &FrozenError{
 		Lock: &lockfile.Lock{
-			Name:       "freeze-deploy",
+			Name:       "deploy",
 			Owner:      "alice",
 			Host:       "dev-host",
 			PID:        1234,
@@ -504,12 +519,195 @@ func TestFrozenErrorMessage(t *testing.T) {
 	if msg == "" {
 		t.Error("Error message should not be empty")
 	}
-	// Should mention the operation name (without freeze- prefix)
 	if !containsStr(msg, "deploy") {
 		t.Errorf("Error message should mention 'deploy', got %q", msg)
 	}
 	if !containsStr(msg, "alice") {
 		t.Errorf("Error message should mention owner 'alice', got %q", msg)
+	}
+
+	// Test with legacy prefixed name (backward compat)
+	legacyErr := &FrozenError{
+		Lock: &lockfile.Lock{
+			Name:       "freeze-deploy",
+			Owner:      "bob",
+			Host:       "ci-host",
+			PID:        5678,
+			AcquiredAt: time.Now().Add(-2 * time.Minute),
+			TTLSec:     600,
+		},
+	}
+	legacyMsg := legacyErr.Error()
+	if !containsStr(legacyMsg, "deploy") {
+		t.Errorf("Legacy error message should mention 'deploy', got %q", legacyMsg)
+	}
+	if containsStr(legacyMsg, "freeze-deploy") {
+		t.Errorf("Legacy error message should strip prefix, got %q", legacyMsg)
+	}
+}
+
+func TestCheckFreeze_LegacyFallback(t *testing.T) {
+	root := t.TempDir()
+
+	// Create freeze in legacy location only (no freezes/ dir file)
+	locksDir := filepath.Join(root, "locks")
+	if err := os.MkdirAll(locksDir, 0750); err != nil {
+		t.Fatalf("MkdirAll error = %v", err)
+	}
+	freezesDir := filepath.Join(root, "freezes")
+	if err := os.MkdirAll(freezesDir, 0750); err != nil {
+		t.Fatalf("MkdirAll error = %v", err)
+	}
+
+	legacyFreeze := &lockfile.Lock{
+		Name:       "freeze-deploy",
+		Owner:      "alice",
+		Host:       "ci-host",
+		PID:        12345,
+		AcquiredAt: time.Now(),
+		TTLSec:     900,
+	}
+	legacyPath := filepath.Join(locksDir, "freeze-deploy.json")
+	if err := lockfile.Write(legacyPath, legacyFreeze); err != nil {
+		t.Fatalf("Write legacy freeze error = %v", err)
+	}
+
+	// CheckFreeze should find the legacy freeze
+	err := CheckFreeze(root, "deploy", nil)
+	if err == nil {
+		t.Fatal("CheckFreeze() should detect legacy freeze")
+	}
+	var frozen *FrozenError
+	if !errors.As(err, &frozen) {
+		t.Fatalf("error should be *FrozenError, got %T: %v", err, err)
+	}
+}
+
+func TestUnfreeze_LegacyFallback(t *testing.T) {
+	root := t.TempDir()
+
+	// Create freeze in legacy location
+	locksDir := filepath.Join(root, "locks")
+	if err := os.MkdirAll(locksDir, 0750); err != nil {
+		t.Fatalf("MkdirAll error = %v", err)
+	}
+	freezesDir := filepath.Join(root, "freezes")
+	if err := os.MkdirAll(freezesDir, 0750); err != nil {
+		t.Fatalf("MkdirAll error = %v", err)
+	}
+
+	legacyFreeze := &lockfile.Lock{
+		Name:       "freeze-deploy",
+		Owner:      "other-owner",
+		Host:       "other-host",
+		PID:        99999,
+		AcquiredAt: time.Now(),
+		TTLSec:     900,
+	}
+	legacyPath := filepath.Join(locksDir, "freeze-deploy.json")
+	if err := lockfile.Write(legacyPath, legacyFreeze); err != nil {
+		t.Fatalf("Write legacy freeze error = %v", err)
+	}
+
+	// Force unfreeze should find and remove legacy file
+	err := Unfreeze(root, "deploy", UnfreezeOptions{Force: true})
+	if err != nil {
+		t.Fatalf("Unfreeze(force) on legacy freeze error = %v", err)
+	}
+
+	// Legacy file should be gone
+	if _, err := os.Stat(legacyPath); !os.IsNotExist(err) {
+		t.Error("Legacy freeze file should be deleted")
+	}
+}
+
+func TestCheckFreeze_ExpiredLegacyFreeze(t *testing.T) {
+	root := t.TempDir()
+
+	// Create an expired freeze in legacy location
+	locksDir := filepath.Join(root, "locks")
+	if err := os.MkdirAll(locksDir, 0750); err != nil {
+		t.Fatalf("MkdirAll error = %v", err)
+	}
+	freezesDir := filepath.Join(root, "freezes")
+	if err := os.MkdirAll(freezesDir, 0750); err != nil {
+		t.Fatalf("MkdirAll error = %v", err)
+	}
+
+	expiredFreeze := &lockfile.Lock{
+		Name:       "freeze-deploy",
+		Owner:      "other",
+		Host:       "other",
+		PID:        99999,
+		AcquiredAt: time.Now().Add(-30 * time.Minute),
+		TTLSec:     60,
+	}
+	legacyPath := filepath.Join(locksDir, "freeze-deploy.json")
+	if err := lockfile.Write(legacyPath, expiredFreeze); err != nil {
+		t.Fatalf("Write expired legacy freeze error = %v", err)
+	}
+
+	// CheckFreeze should auto-prune the legacy expired freeze
+	err := CheckFreeze(root, "deploy", nil)
+	if err != nil {
+		t.Errorf("CheckFreeze() should auto-prune expired legacy freeze, got %v", err)
+	}
+
+	// Legacy file should be removed
+	if _, err := os.Stat(legacyPath); !os.IsNotExist(err) {
+		t.Error("Expired legacy freeze file should be deleted")
+	}
+}
+
+func TestFreezeNoNamespaceCollision(t *testing.T) {
+	root := t.TempDir()
+
+	// Create a regular lock named "freeze-deploy" in locks/
+	locksDir := filepath.Join(root, "locks")
+	if err := os.MkdirAll(locksDir, 0750); err != nil {
+		t.Fatalf("MkdirAll error = %v", err)
+	}
+	freezesDir := filepath.Join(root, "freezes")
+	if err := os.MkdirAll(freezesDir, 0750); err != nil {
+		t.Fatalf("MkdirAll error = %v", err)
+	}
+
+	regularLock := &lockfile.Lock{
+		Name:       "freeze-deploy",
+		Owner:      "user",
+		Host:       "host",
+		PID:        1234,
+		AcquiredAt: time.Now(),
+		TTLSec:     300,
+	}
+	regularPath := filepath.Join(locksDir, "freeze-deploy.json")
+	if err := lockfile.Write(regularPath, regularLock); err != nil {
+		t.Fatalf("Write regular lock error = %v", err)
+	}
+
+	// Create an actual freeze for "deploy" — should go to freezes/deploy.json
+	err := Freeze(root, "deploy", FreezeOptions{TTL: 15 * time.Minute})
+	if err != nil {
+		t.Fatalf("Freeze() error = %v", err)
+	}
+
+	// Both files should exist independently
+	freezePath := filepath.Join(freezesDir, "deploy.json")
+	if _, err := os.Stat(regularPath); os.IsNotExist(err) {
+		t.Error("Regular lock at locks/freeze-deploy.json should still exist")
+	}
+	if _, err := os.Stat(freezePath); os.IsNotExist(err) {
+		t.Error("Freeze at freezes/deploy.json should exist")
+	}
+
+	// CheckFreeze should find the actual freeze, not be confused by the regular lock
+	err = CheckFreeze(root, "deploy", nil)
+	if err == nil {
+		t.Fatal("CheckFreeze() should detect the freeze")
+	}
+	var frozen *FrozenError
+	if !errors.As(err, &frozen) {
+		t.Fatalf("error should be *FrozenError, got %T: %v", err, err)
 	}
 }
 

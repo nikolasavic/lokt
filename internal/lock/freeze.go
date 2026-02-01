@@ -30,8 +30,13 @@ func (e *FrozenError) Error() string {
 	if rem := e.Lock.Remaining(); rem > 0 {
 		remaining = fmt.Sprintf(", %s remaining", rem.Truncate(time.Second))
 	}
+	// Handle both new-style (clean name) and legacy (freeze-prefixed) names
+	displayName := e.Lock.Name
+	if IsFreezeLock(displayName) {
+		displayName = displayName[len(FreezePrefix):]
+	}
 	return fmt.Sprintf("operation %q frozen by %s@%s for %s%s",
-		e.Lock.Name[len(FreezePrefix):], e.Lock.Owner, e.Lock.Host, age, remaining)
+		displayName, e.Lock.Owner, e.Lock.Host, age, remaining)
 }
 
 func (e *FrozenError) Unwrap() error {
@@ -60,8 +65,7 @@ func Freeze(rootDir, name string, opts FreezeOptions) error {
 		return fmt.Errorf("ensure dirs: %w", err)
 	}
 
-	freezeName := FreezePrefix + name
-	path := root.LockFilePath(rootDir, freezeName)
+	path := root.FreezeFilePath(rootDir, name)
 	id := identity.Current()
 
 	now := time.Now()
@@ -69,7 +73,7 @@ func Freeze(rootDir, name string, opts FreezeOptions) error {
 	exp := now.Add(time.Duration(ttlSec) * time.Second)
 	lock := &lockfile.Lock{
 		Version:    lockfile.CurrentLockfileVersion,
-		Name:       freezeName,
+		Name:       name,
 		Owner:      id.Owner,
 		Host:       id.Host,
 		PID:        id.PID,
@@ -100,7 +104,7 @@ func Freeze(rootDir, name string, opts FreezeOptions) error {
 						}
 					}
 				}
-				return &HeldError{Lock: &lockfile.Lock{Name: freezeName}}
+				return &HeldError{Lock: &lockfile.Lock{Name: name}}
 			}
 
 			// If existing freeze is expired, remove and retry
@@ -141,15 +145,14 @@ type UnfreezeOptions struct {
 // Unfreeze removes a freeze lock.
 // Returns ErrNotFound if no freeze exists.
 // Returns NotOwnerError if caller doesn't own the freeze (unless Force is set).
+// Checks the new freezes/ directory first, then falls back to the legacy
+// locks/freeze-<name>.json location for backward compatibility.
 func Unfreeze(rootDir, name string, opts UnfreezeOptions) error {
 	if err := lockfile.ValidateName(name); err != nil {
 		return err
 	}
 
-	freezeName := FreezePrefix + name
-	path := root.LockFilePath(rootDir, freezeName)
-
-	existing, err := lockfile.Read(path)
+	existing, path, err := readFreezeFile(rootDir, name)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return ErrNotFound
@@ -208,11 +211,10 @@ func Unfreeze(rootDir, name string, opts UnfreezeOptions) error {
 // Returns nil if no freeze is active (safe to proceed).
 // Returns FrozenError if an active, non-expired freeze exists.
 // Auto-prunes expired freezes.
+// Checks the new freezes/ directory first, then falls back to the legacy
+// locks/freeze-<name>.json location for backward compatibility.
 func CheckFreeze(rootDir, name string, auditor *audit.Writer) error {
-	freezeName := FreezePrefix + name
-	path := root.LockFilePath(rootDir, freezeName)
-
-	existing, err := lockfile.Read(path)
+	existing, path, err := readFreezeFile(rootDir, name)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil // No freeze
@@ -244,7 +246,32 @@ func CheckFreeze(rootDir, name string, auditor *audit.Writer) error {
 	return &FrozenError{Lock: existing}
 }
 
-// IsFreezelock returns true if the lock name has the freeze prefix.
+// readFreezeFile reads a freeze file, checking the new freezes/ directory first
+// and falling back to the legacy locks/freeze-<name>.json location.
+// Returns the lock data, the path it was found at, and any error.
+func readFreezeFile(rootDir, name string) (*lockfile.Lock, string, error) {
+	// Try new location first: freezes/<name>.json
+	path := root.FreezeFilePath(rootDir, name)
+	lk, err := lockfile.Read(path)
+	if err == nil {
+		return lk, path, nil
+	}
+	if !os.IsNotExist(err) {
+		// File exists at new path but is corrupted/unsupported
+		return nil, path, err
+	}
+
+	// Fall back to legacy location: locks/freeze-<name>.json
+	legacyPath := root.LockFilePath(rootDir, FreezePrefix+name)
+	lk, err = lockfile.Read(legacyPath)
+	return lk, legacyPath, err
+}
+
+// IsFreezeLock returns true if the lock name has the freeze prefix.
+//
+// Deprecated: With freeze namespace separation, freeze detection should use
+// directory membership (freezes/ vs locks/) rather than name prefix.
+// Kept for backward compatibility with legacy freeze files in locks/.
 func IsFreezeLock(name string) bool {
 	return len(name) > len(FreezePrefix) && name[:len(FreezePrefix)] == FreezePrefix
 }
