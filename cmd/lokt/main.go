@@ -865,7 +865,6 @@ func pruneLockIfExpired(rootDir, name string) bool {
 }
 
 func readLockFile(path string) (*lockFile, error) {
-	// Import lockfile package inline to avoid import cycle
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -873,6 +872,10 @@ func readLockFile(path string) (*lockFile, error) {
 	var lf lockFile
 	if err := parseJSON(data, &lf); err != nil {
 		return nil, err
+	}
+	if lf.Version > lockfile.CurrentLockfileVersion {
+		return nil, fmt.Errorf("%w: version %d not supported (max: %d); upgrade lokt",
+			lockfile.ErrUnsupportedVersion, lf.Version, lockfile.CurrentLockfileVersion)
 	}
 	return &lf, nil
 }

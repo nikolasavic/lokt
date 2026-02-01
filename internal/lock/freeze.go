@@ -86,6 +86,9 @@ func Freeze(rootDir, name string, opts FreezeOptions) error {
 		if os.IsExist(err) {
 			existing, readErr := lockfile.Read(path)
 			if readErr != nil {
+				if errors.Is(readErr, lockfile.ErrUnsupportedVersion) {
+					return readErr
+				}
 				if errors.Is(readErr, lockfile.ErrCorrupted) {
 					if removeErr := os.Remove(path); removeErr == nil {
 						_ = lockfile.SyncDir(path)
@@ -150,6 +153,19 @@ func Unfreeze(rootDir, name string, opts UnfreezeOptions) error {
 		if os.IsNotExist(err) {
 			return ErrNotFound
 		}
+		if errors.Is(err, lockfile.ErrUnsupportedVersion) {
+			if opts.Force {
+				if removeErr := os.Remove(path); removeErr != nil {
+					if os.IsNotExist(removeErr) {
+						return ErrNotFound
+					}
+					return fmt.Errorf("remove freeze: %w", removeErr)
+				}
+				_ = lockfile.SyncDir(path)
+				return nil
+			}
+			return fmt.Errorf("read freeze: %w", err)
+		}
 		if errors.Is(err, lockfile.ErrCorrupted) {
 			if opts.Force {
 				if removeErr := os.Remove(path); removeErr != nil {
@@ -199,6 +215,10 @@ func CheckFreeze(rootDir, name string, auditor *audit.Writer) error {
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil // No freeze
+		}
+		if errors.Is(err, lockfile.ErrUnsupportedVersion) {
+			// Freeze from newer lokt version — treat as active (fail safe)
+			return err
 		}
 		if errors.Is(err, lockfile.ErrCorrupted) {
 			// Corrupted freeze file — remove it

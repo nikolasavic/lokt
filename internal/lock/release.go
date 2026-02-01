@@ -80,6 +80,20 @@ func Release(rootDir, name string, opts ReleaseOptions) error {
 		if os.IsNotExist(err) {
 			return ErrNotFound
 		}
+		if errors.Is(err, lockfile.ErrUnsupportedVersion) {
+			// Lock from a newer lokt version — force can still remove
+			if opts.Force {
+				if removeErr := os.Remove(path); removeErr != nil {
+					if os.IsNotExist(removeErr) {
+						return ErrNotFound
+					}
+					return fmt.Errorf("remove lock: %w", removeErr)
+				}
+				_ = lockfile.SyncDir(path)
+				return nil
+			}
+			return fmt.Errorf("read lock: %w", err)
+		}
 		if errors.Is(err, lockfile.ErrCorrupted) {
 			// Corrupted lock file — handle based on release mode
 			if opts.Force || opts.BreakStale {

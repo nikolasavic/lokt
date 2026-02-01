@@ -78,6 +78,10 @@ func Acquire(rootDir, name string, opts AcquireOptions) error {
 			// Lock exists - read it and check if stale
 			existing, readErr := lockfile.Read(path)
 			if readErr != nil {
+				if errors.Is(readErr, lockfile.ErrUnsupportedVersion) {
+					// Lock written by a newer lokt version; do not touch it
+					return readErr
+				}
 				if errors.Is(readErr, lockfile.ErrCorrupted) {
 					// Corrupted lock file — no valid holder, safe to remove
 					if removeErr := os.Remove(path); removeErr == nil {
