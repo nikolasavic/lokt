@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -205,17 +206,24 @@ func TestTailAuditLog_DetectsTruncation(t *testing.T) {
 	dir := t.TempDir()
 	auditPath := filepath.Join(dir, "audit.log")
 
-	// Create file with initial content
-	initialEvent := auditEvent{
-		Timestamp: time.Now(),
-		Event:     "acquire",
-		Name:      "initial",
-		Owner:     "alice",
-		Host:      "h1",
-		PID:       1,
+	// Create file with enough initial content that the post-truncation single
+	// event is always smaller. This ensures truncation detection works even if
+	// truncate + write happen between poll cycles (poll detects size < offset).
+	var initial []byte
+	for i := range 5 {
+		ev := auditEvent{
+			Timestamp: time.Now(),
+			Event:     "acquire",
+			Name:      fmt.Sprintf("initial-%d", i),
+			Owner:     "alice",
+			Host:      "h1",
+			PID:       1,
+		}
+		data, _ := json.Marshal(ev)
+		initial = append(initial, data...)
+		initial = append(initial, '\n')
 	}
-	data, _ := json.Marshal(initialEvent)
-	err := os.WriteFile(auditPath, append(data, '\n'), 0600)
+	err := os.WriteFile(auditPath, initial, 0600)
 	if err != nil {
 		t.Fatalf("Failed to write initial content: %v", err)
 	}
@@ -248,7 +256,7 @@ func TestTailAuditLog_DetectsTruncation(t *testing.T) {
 		Host:      "h2",
 		PID:       2,
 	}
-	data, _ = json.Marshal(newEvent)
+	data, _ := json.Marshal(newEvent)
 	f, _ := os.OpenFile(auditPath, os.O_APPEND|os.O_WRONLY, 0644)
 	_, _ = f.Write(append(data, '\n'))
 	_ = f.Close()
