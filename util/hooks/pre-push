@@ -26,10 +26,10 @@ cd "$REPO_ROOT"
 # 1. Run Tests
 # =============================================================================
 
-echo "Running tests..."
-if ! go test ./... >/dev/null 2>&1; then
+echo "Running tests (with race detector)..."
+if ! go test -race ./... >/dev/null 2>&1; then
     echo_error "Tests failed"
-    echo "Run 'go test ./...' to see details"
+    echo "Run 'go test -race ./...' to see details"
     exit 1
 fi
 echo_ok "Tests pass"
