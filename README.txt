@@ -21,7 +21,7 @@ INSTALL
 
 Or specify a version:
 
-  LOKT_VERSION=v0.2.0 curl -fsSL .../install.sh | sh
+  LOKT_VERSION=v0.3.0 curl -fsSL .../install.sh | sh
 
 Supported platforms: macOS (amd64, arm64), Linux (amd64, arm64)
 
@@ -37,6 +37,10 @@ CORE COMMANDS
   lokt status [<name>] [--json] [--prune-expired]
       Show held locks + metadata. --prune-expired removes expired locks
       while listing.
+
+  lokt why <name> [--json]
+      Explain why a lock cannot be acquired. Shows holder info, freeze
+      status, and staleness details.
 
   lokt guard <name> [--ttl 30m] [--wait] [--timeout 10m] -- <cmd...>
       Acquire lock, run command, release lock (even on failure).
@@ -62,14 +66,16 @@ AUDIT LOG
 ---------
 
 All lock operations emit events to an append-only JSONL file at
-<root>/audit.log. Useful for debugging contention and post-incident review.
+<root>/audit.log. Each lifecycle (acquire through release) shares a
+lock_id for easy correlation and filtering.
 
   lokt audit [--since 1h] [--name deploy] [--tail]
       Query the audit log. --since accepts Go durations (1h, 30m) or
       RFC3339 timestamps. --tail follows in real-time (like tail -f).
 
 Event types: acquire, deny, release, force-break, stale-break,
-auto-prune, corrupt-break, renew.
+auto-prune, corrupt-break, renew, freeze, unfreeze, force-unfreeze,
+freeze-deny.
 
 HEALTH CHECK
 ------------
