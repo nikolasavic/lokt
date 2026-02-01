@@ -2,6 +2,7 @@ package root
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -57,5 +58,64 @@ func TestFind_Unchanged(t *testing.T) {
 	}
 	if path != testPath {
 		t.Errorf("Find() = %q, want %q", path, testPath)
+	}
+}
+
+func TestEnsureDirs_CreatesBothDirectories(t *testing.T) {
+	rootDir := t.TempDir()
+
+	if err := EnsureDirs(rootDir); err != nil {
+		t.Fatalf("EnsureDirs() error = %v", err)
+	}
+
+	locksPath := filepath.Join(rootDir, LocksDir)
+	freezesPath := filepath.Join(rootDir, FreezesDir)
+
+	if info, err := os.Stat(locksPath); err != nil {
+		t.Errorf("locks directory not created: %v", err)
+	} else if !info.IsDir() {
+		t.Error("locks path is not a directory")
+	}
+
+	if info, err := os.Stat(freezesPath); err != nil {
+		t.Errorf("freezes directory not created: %v", err)
+	} else if !info.IsDir() {
+		t.Error("freezes path is not a directory")
+	}
+}
+
+func TestFreezesPath(t *testing.T) {
+	root := t.TempDir()
+	got := FreezesPath(root)
+	want := root + string(filepath.Separator) + FreezesDir
+	if got != want {
+		t.Errorf("FreezesPath() = %q, want %q", got, want)
+	}
+}
+
+func TestFreezeFilePath(t *testing.T) {
+	root := t.TempDir()
+	got := FreezeFilePath(root, "deploy")
+	want := root + string(filepath.Separator) + FreezesDir + string(filepath.Separator) + "deploy.json"
+	if got != want {
+		t.Errorf("FreezeFilePath() = %q, want %q", got, want)
+	}
+}
+
+func TestLocksPath(t *testing.T) {
+	root := t.TempDir()
+	got := LocksPath(root)
+	want := root + string(filepath.Separator) + LocksDir
+	if got != want {
+		t.Errorf("LocksPath() = %q, want %q", got, want)
+	}
+}
+
+func TestLockFilePath(t *testing.T) {
+	root := t.TempDir()
+	got := LockFilePath(root, "build")
+	want := root + string(filepath.Separator) + LocksDir + string(filepath.Separator) + "build.json"
+	if got != want {
+		t.Errorf("LockFilePath() = %q, want %q", got, want)
 	}
 }

@@ -12,6 +12,7 @@ const (
 	EnvLoktRoot = "LOKT_ROOT"
 	DirName     = ".lokt"
 	LocksDir    = "locks"
+	FreezesDir  = "freezes"
 )
 
 // DiscoveryMethod indicates how the Lokt root was discovered.
@@ -91,10 +92,12 @@ func findGitRoot() (string, error) {
 	return gitDir, nil
 }
 
-// EnsureDirs creates the root and locks directories if they don't exist.
+// EnsureDirs creates the root, locks, and freezes directories if they don't exist.
 func EnsureDirs(root string) error {
-	locksPath := filepath.Join(root, LocksDir)
-	return os.MkdirAll(locksPath, 0700)
+	if err := os.MkdirAll(filepath.Join(root, LocksDir), 0700); err != nil {
+		return err
+	}
+	return os.MkdirAll(filepath.Join(root, FreezesDir), 0700)
 }
 
 // LocksPath returns the path to the locks directory.
@@ -105,4 +108,14 @@ func LocksPath(root string) string {
 // LockFilePath returns the path to a specific lock file.
 func LockFilePath(root, name string) string {
 	return filepath.Join(root, LocksDir, name+".json")
+}
+
+// FreezesPath returns the path to the freezes directory.
+func FreezesPath(root string) string {
+	return filepath.Join(root, FreezesDir)
+}
+
+// FreezeFilePath returns the path to a specific freeze file.
+func FreezeFilePath(root, name string) string {
+	return filepath.Join(root, FreezesDir, name+".json")
 }
