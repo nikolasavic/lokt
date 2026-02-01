@@ -31,6 +31,7 @@ type Event struct {
 	Timestamp time.Time      `json:"ts"`
 	Event     string         `json:"event"`
 	Name      string         `json:"name"`
+	LockID    string         `json:"lock_id,omitempty"`
 	Owner     string         `json:"owner"`
 	Host      string         `json:"host"`
 	PID       int            `json:"pid"`

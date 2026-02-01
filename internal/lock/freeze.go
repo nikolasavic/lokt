@@ -74,6 +74,7 @@ func Freeze(rootDir, name string, opts FreezeOptions) error {
 	lock := &lockfile.Lock{
 		Version:    lockfile.CurrentLockfileVersion,
 		Name:       name,
+		LockID:     lockfile.GenerateLockID(),
 		Owner:      id.Owner,
 		Host:       id.Host,
 		PID:        id.PID,
@@ -132,7 +133,7 @@ writeLock:
 		return fmt.Errorf("write freeze file: %w", err)
 	}
 
-	emitFreezeEvent(opts.Auditor, id, name, lock.TTLSec)
+	emitFreezeEvent(opts.Auditor, id, name, lock.TTLSec, lock.LockID)
 	return nil
 }
 
@@ -203,7 +204,7 @@ func Unfreeze(rootDir, name string, opts UnfreezeOptions) error {
 		return fmt.Errorf("sync directory: %w", err)
 	}
 
-	emitUnfreezeEvent(opts.Auditor, existing, opts.Force)
+	emitUnfreezeEvent(opts.Auditor, existing, opts.Force, existing.LockID)
 	return nil
 }
 
@@ -242,7 +243,7 @@ func CheckFreeze(rootDir, name string, auditor *audit.Writer) error {
 	}
 
 	// Active freeze — emit deny event and return error
-	emitFreezeDenyEvent(auditor, name, existing)
+	emitFreezeDenyEvent(auditor, name, existing, existing.LockID)
 	return &FrozenError{Lock: existing}
 }
 
@@ -276,13 +277,14 @@ func IsFreezeLock(name string) bool {
 	return len(name) > len(FreezePrefix) && name[:len(FreezePrefix)] == FreezePrefix
 }
 
-func emitFreezeEvent(w *audit.Writer, id identity.Identity, name string, ttlSec int) {
+func emitFreezeEvent(w *audit.Writer, id identity.Identity, name string, ttlSec int, lockID string) {
 	if w == nil {
 		return
 	}
 	w.Emit(&audit.Event{
 		Event:  audit.EventFreeze,
 		Name:   name,
+		LockID: lockID,
 		Owner:  id.Owner,
 		Host:   id.Host,
 		PID:    id.PID,
@@ -290,7 +292,7 @@ func emitFreezeEvent(w *audit.Writer, id identity.Identity, name string, ttlSec 
 	})
 }
 
-func emitUnfreezeEvent(w *audit.Writer, lock *lockfile.Lock, force bool) {
+func emitUnfreezeEvent(w *audit.Writer, lock *lockfile.Lock, force bool, lockID string) {
 	if w == nil {
 		return
 	}
@@ -307,6 +309,7 @@ func emitUnfreezeEvent(w *audit.Writer, lock *lockfile.Lock, force bool) {
 	w.Emit(&audit.Event{
 		Event:  eventType,
 		Name:   name,
+		LockID: lockID,
 		Owner:  id.Owner,
 		Host:   id.Host,
 		PID:    id.PID,
@@ -314,17 +317,18 @@ func emitUnfreezeEvent(w *audit.Writer, lock *lockfile.Lock, force bool) {
 	})
 }
 
-func emitFreezeDenyEvent(w *audit.Writer, name string, freeze *lockfile.Lock) {
+func emitFreezeDenyEvent(w *audit.Writer, name string, freeze *lockfile.Lock, lockID string) {
 	if w == nil {
 		return
 	}
 	id := identity.Current()
 	w.Emit(&audit.Event{
-		Event: audit.EventFreezeDeny,
-		Name:  name,
-		Owner: id.Owner,
-		Host:  id.Host,
-		PID:   id.PID,
+		Event:  audit.EventFreezeDeny,
+		Name:   name,
+		LockID: lockID,
+		Owner:  id.Owner,
+		Host:   id.Host,
+		PID:    id.PID,
 		Extra: map[string]any{
 			"freeze_owner": freeze.Owner,
 			"freeze_host":  freeze.Host,

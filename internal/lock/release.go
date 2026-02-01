@@ -234,6 +234,7 @@ func emitReleaseEvent(w *audit.Writer, lock *lockfile.Lock, opts ReleaseOptions)
 	w.Emit(&audit.Event{
 		Event:  eventType,
 		Name:   lock.Name,
+		LockID: lock.LockID,
 		Owner:  id.Owner,
 		Host:   id.Host,
 		PID:    id.PID,

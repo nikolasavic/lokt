@@ -48,19 +48,20 @@ func Renew(rootDir, name string, opts RenewOptions) error {
 	}
 
 	// Emit audit event on success
-	emitRenewEvent(opts.Auditor, id, name, existing.TTLSec)
+	emitRenewEvent(opts.Auditor, id, name, existing.TTLSec, existing.LockID)
 
 	return nil
 }
 
 // emitRenewEvent emits a renew audit event. Safe to call with nil auditor.
-func emitRenewEvent(w *audit.Writer, id identity.Identity, name string, ttlSec int) {
+func emitRenewEvent(w *audit.Writer, id identity.Identity, name string, ttlSec int, lockID string) {
 	if w == nil {
 		return
 	}
 	w.Emit(&audit.Event{
 		Event:  audit.EventRenew,
 		Name:   name,
+		LockID: lockID,
 		Owner:  id.Owner,
 		Host:   id.Host,
 		PID:    id.PID,

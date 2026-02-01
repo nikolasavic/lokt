@@ -59,6 +59,7 @@ func Acquire(rootDir, name string, opts AcquireOptions) error {
 	lock := &lockfile.Lock{
 		Version:    lockfile.CurrentLockfileVersion,
 		Name:       name,
+		LockID:     lockfile.GenerateLockID(),
 		Owner:      id.Owner,
 		Host:       id.Host,
 		PID:        id.PID,
@@ -108,7 +109,11 @@ func Acquire(rootDir, name string, opts AcquireOptions) error {
 			// Owner match is by LOKT_OWNER string only (not PID/host), so the
 			// same agent identity on a different process or host can re-acquire.
 			if existing.Owner == id.Owner {
-				// Overwrite with fresh identity + timestamp + new TTL
+				// Overwrite with fresh identity + timestamp + new TTL.
+				// Preserve the existing lock_id to maintain the correlation chain.
+				if existing.LockID != "" {
+					lock.LockID = existing.LockID
+				}
 				lock.AcquiredAt = time.Now()
 				if lock.TTLSec > 0 {
 					exp := lock.AcquiredAt.Add(time.Duration(lock.TTLSec) * time.Second)
@@ -117,7 +122,7 @@ func Acquire(rootDir, name string, opts AcquireOptions) error {
 				if err := lockfile.Write(path, lock); err != nil {
 					return fmt.Errorf("refresh lock file: %w", err)
 				}
-				emitRenewEvent(opts.Auditor, id, name, lock.TTLSec)
+				emitRenewEvent(opts.Auditor, id, name, lock.TTLSec, lock.LockID)
 				return nil
 			}
 
@@ -163,7 +168,7 @@ writeLock:
 	}
 
 	// Emit acquire event
-	emitAcquireEvent(opts.Auditor, id, name, lock.TTLSec)
+	emitAcquireEvent(opts.Auditor, id, name, lock.TTLSec, lock.LockID)
 
 	return nil
 }
@@ -267,13 +272,14 @@ func tryBreakStale(rootDir, name string) bool {
 }
 
 // emitAcquireEvent emits an acquire audit event. Safe to call with nil auditor.
-func emitAcquireEvent(w *audit.Writer, id identity.Identity, name string, ttlSec int) {
+func emitAcquireEvent(w *audit.Writer, id identity.Identity, name string, ttlSec int, lockID string) {
 	if w == nil {
 		return
 	}
 	w.Emit(&audit.Event{
 		Event:  audit.EventAcquire,
 		Name:   name,
+		LockID: lockID,
 		Owner:  id.Owner,
 		Host:   id.Host,
 		PID:    id.PID,
@@ -329,11 +335,12 @@ func emitAutoPruneEvent(w *audit.Writer, id identity.Identity, name string, prun
 		"pruned_pid":   pruned.PID,
 	}
 	w.Emit(&audit.Event{
-		Event: audit.EventAutoPrune,
-		Name:  name,
-		Owner: id.Owner,
-		Host:  id.Host,
-		PID:   id.PID,
-		Extra: extra,
+		Event:  audit.EventAutoPrune,
+		Name:   name,
+		LockID: pruned.LockID,
+		Owner:  id.Owner,
+		Host:   id.Host,
+		PID:    id.PID,
+		Extra:  extra,
 	})
 }

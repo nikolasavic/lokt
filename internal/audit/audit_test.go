@@ -187,6 +187,89 @@ func TestWriterHandlesMissingDirectory(t *testing.T) {
 	})
 }
 
+func TestEventLockIDSerialization(t *testing.T) {
+	ts := time.Date(2026, 2, 1, 12, 0, 0, 0, time.UTC)
+	event := Event{
+		Timestamp: ts,
+		Event:     EventAcquire,
+		Name:      "build",
+		LockID:    "abcdef0123456789abcdef0123456789",
+		Owner:     "alice",
+		Host:      "host1",
+		PID:       12345,
+		TTLSec:    300,
+	}
+
+	data, err := json.Marshal(event)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+
+	jsonStr := string(data)
+	if !strings.Contains(jsonStr, `"lock_id":"abcdef0123456789abcdef0123456789"`) {
+		t.Errorf("Expected lock_id in JSON, got: %s", jsonStr)
+	}
+
+	// Verify roundtrip
+	var decoded Event
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	if decoded.LockID != event.LockID {
+		t.Errorf("LockID = %q, want %q", decoded.LockID, event.LockID)
+	}
+}
+
+func TestEventOmitsLockIDWhenEmpty(t *testing.T) {
+	event := Event{
+		Timestamp: time.Now(),
+		Event:     EventCorruptBreak,
+		Name:      "build",
+		Owner:     "alice",
+		Host:      "host1",
+		PID:       12345,
+	}
+
+	data, err := json.Marshal(event)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+
+	jsonStr := string(data)
+	if strings.Contains(jsonStr, "lock_id") {
+		t.Errorf("Expected lock_id to be omitted when empty, got: %s", jsonStr)
+	}
+}
+
+func TestWriterEmitsLockID(t *testing.T) {
+	dir := t.TempDir()
+	w := NewWriter(dir)
+
+	w.Emit(&Event{
+		Event:  EventAcquire,
+		Name:   "test",
+		LockID: "deadbeef" + "deadbeef" + "deadbeef" + "deadbeef",
+		Owner:  "alice",
+		Host:   "h1",
+		PID:    1,
+	})
+
+	path := filepath.Join(dir, "audit.log")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("Failed to read audit.log: %v", err)
+	}
+
+	var decoded Event
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Failed to unmarshal: %v", err)
+	}
+
+	if decoded.LockID != "deadbeefdeadbeefdeadbeefdeadbeef" {
+		t.Errorf("LockID = %q, want %q", decoded.LockID, "deadbeefdeadbeefdeadbeefdeadbeef")
+	}
+}
+
 func TestEventConstants(t *testing.T) {
 	// Verify all event constants are defined and non-empty
 	constants := []string{

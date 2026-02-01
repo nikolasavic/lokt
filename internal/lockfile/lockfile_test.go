@@ -599,6 +599,116 @@ func TestIsExpired_WithExpiresAt(t *testing.T) {
 	}
 }
 
+func TestGenerateLockID(t *testing.T) {
+	id := GenerateLockID()
+	if len(id) != 32 {
+		t.Errorf("GenerateLockID() length = %d, want 32", len(id))
+	}
+	// Verify it's valid hex
+	for _, c := range id {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			t.Errorf("GenerateLockID() contains non-hex character %q in %q", string(c), id)
+			break
+		}
+	}
+	// Two calls should produce different IDs
+	id2 := GenerateLockID()
+	if id == id2 {
+		t.Errorf("GenerateLockID() produced duplicate IDs: %q", id)
+	}
+}
+
+func TestWriteAndRead_LockID(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.lock")
+
+	lock := &Lock{
+		Version:    CurrentLockfileVersion,
+		Name:       "test",
+		LockID:     "abcdef0123456789abcdef0123456789",
+		Owner:      "testuser",
+		Host:       "testhost",
+		PID:        12345,
+		AcquiredAt: time.Now().Truncate(time.Millisecond),
+		TTLSec:     300,
+	}
+
+	if err := Write(path, lock); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+
+	got, err := Read(path)
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+
+	if got.LockID != lock.LockID {
+		t.Errorf("LockID = %q, want %q", got.LockID, lock.LockID)
+	}
+}
+
+func TestWriteOmitsLockID_WhenEmpty(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "noid.lock")
+
+	lock := &Lock{
+		Version:    CurrentLockfileVersion,
+		Name:       "test",
+		Owner:      "testuser",
+		Host:       "testhost",
+		PID:        12345,
+		AcquiredAt: time.Now().Truncate(time.Millisecond),
+	}
+
+	if err := Write(path, lock); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+
+	if _, exists := raw["lock_id"]; exists {
+		t.Error("lock_id should be omitted when empty (omitempty)")
+	}
+}
+
+func TestRead_BackwardCompat_NoLockID(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "old.lock")
+
+	oldJSON := `{
+  "version": 1,
+  "name": "test",
+  "owner": "testuser",
+  "host": "testhost",
+  "pid": 12345,
+  "acquired_ts": "2026-01-28T10:00:00Z",
+  "ttl_sec": 300
+}`
+	if err := os.WriteFile(path, []byte(oldJSON), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := Read(path)
+	if err != nil {
+		t.Fatalf("Read() should accept lockfile without lock_id, got error: %v", err)
+	}
+
+	if got.LockID != "" {
+		t.Errorf("LockID should be empty for old lockfile, got %q", got.LockID)
+	}
+	if got.Name != "test" {
+		t.Errorf("Name = %q, want %q", got.Name, "test")
+	}
+}
+
 func TestRemaining(t *testing.T) {
 	tests := []struct {
 		name         string

@@ -1195,3 +1195,248 @@ func TestAcquireWithWait_ReentrantImmediateSuccess(t *testing.T) {
 		t.Errorf("TTLSec = %d, want 600", lock.TTLSec)
 	}
 }
+
+func TestLockID_AcquireRelease(t *testing.T) {
+	root := t.TempDir()
+	auditor := audit.NewWriter(root)
+
+	err := Acquire(root, "lid-test", AcquireOptions{
+		TTL:     5 * time.Minute,
+		Auditor: auditor,
+	})
+	if err != nil {
+		t.Fatalf("Acquire() error = %v", err)
+	}
+
+	// Read lockfile and verify lock_id
+	path := filepath.Join(root, "locks", "lid-test.json")
+	lk, err := lockfile.Read(path)
+	if err != nil {
+		t.Fatalf("Read lock error = %v", err)
+	}
+	if len(lk.LockID) != 32 {
+		t.Fatalf("LockID length = %d, want 32", len(lk.LockID))
+	}
+
+	// Release
+	err = Release(root, "lid-test", ReleaseOptions{Auditor: auditor})
+	if err != nil {
+		t.Fatalf("Release() error = %v", err)
+	}
+
+	// Verify acquire and release events share the same lock_id
+	events := readAuditEvents(t, root)
+	if len(events) != 2 {
+		t.Fatalf("Expected 2 audit events, got %d", len(events))
+	}
+
+	acquireEvent := events[0]
+	releaseEvent := events[1]
+
+	if acquireEvent.Event != audit.EventAcquire {
+		t.Errorf("First event = %q, want %q", acquireEvent.Event, audit.EventAcquire)
+	}
+	if releaseEvent.Event != audit.EventRelease {
+		t.Errorf("Second event = %q, want %q", releaseEvent.Event, audit.EventRelease)
+	}
+	if acquireEvent.LockID != lk.LockID {
+		t.Errorf("Acquire event LockID = %q, want %q", acquireEvent.LockID, lk.LockID)
+	}
+	if releaseEvent.LockID != lk.LockID {
+		t.Errorf("Release event LockID = %q, want %q (should match acquire)", releaseEvent.LockID, lk.LockID)
+	}
+}
+
+func TestLockID_RenewPreservesID(t *testing.T) {
+	root := t.TempDir()
+	auditor := audit.NewWriter(root)
+
+	err := Acquire(root, "renew-lid", AcquireOptions{
+		TTL:     5 * time.Minute,
+		Auditor: auditor,
+	})
+	if err != nil {
+		t.Fatalf("Acquire() error = %v", err)
+	}
+
+	// Read original lock_id
+	path := filepath.Join(root, "locks", "renew-lid.json")
+	lk, err := lockfile.Read(path)
+	if err != nil {
+		t.Fatalf("Read lock error = %v", err)
+	}
+	origID := lk.LockID
+
+	// Renew
+	err = Renew(root, "renew-lid", RenewOptions{Auditor: auditor})
+	if err != nil {
+		t.Fatalf("Renew() error = %v", err)
+	}
+
+	// Read lock_id again — must be the same
+	lk2, err := lockfile.Read(path)
+	if err != nil {
+		t.Fatalf("Read lock after renew error = %v", err)
+	}
+	if lk2.LockID != origID {
+		t.Errorf("LockID after renew = %q, want %q (should be preserved)", lk2.LockID, origID)
+	}
+
+	// Verify renew audit event has same lock_id
+	events := readAuditEvents(t, root)
+	var renewEvent *audit.Event
+	for i := range events {
+		if events[i].Event == audit.EventRenew {
+			renewEvent = &events[i]
+			break
+		}
+	}
+	if renewEvent == nil {
+		t.Fatal("No renew event found in audit log")
+	}
+	if renewEvent.LockID != origID {
+		t.Errorf("Renew event LockID = %q, want %q", renewEvent.LockID, origID)
+	}
+}
+
+func TestLockID_ReentrantPreservesID(t *testing.T) {
+	root := t.TempDir()
+	auditor := audit.NewWriter(root)
+
+	err := Acquire(root, "reent-lid", AcquireOptions{
+		TTL:     5 * time.Minute,
+		Auditor: auditor,
+	})
+	if err != nil {
+		t.Fatalf("Acquire() error = %v", err)
+	}
+
+	// Read original lock_id
+	path := filepath.Join(root, "locks", "reent-lid.json")
+	lk, err := lockfile.Read(path)
+	if err != nil {
+		t.Fatalf("Read lock error = %v", err)
+	}
+	origID := lk.LockID
+
+	// Reentrant acquire (same owner)
+	err = Acquire(root, "reent-lid", AcquireOptions{
+		TTL:     10 * time.Minute,
+		Auditor: auditor,
+	})
+	if err != nil {
+		t.Fatalf("Reentrant Acquire() error = %v", err)
+	}
+
+	// Read lock_id — must be the same
+	lk2, err := lockfile.Read(path)
+	if err != nil {
+		t.Fatalf("Read lock after reentrant error = %v", err)
+	}
+	if lk2.LockID != origID {
+		t.Errorf("LockID after reentrant = %q, want %q (should be preserved)", lk2.LockID, origID)
+	}
+
+	// Verify renew event from reentrant has same lock_id
+	events := readAuditEvents(t, root)
+	var renewEvent *audit.Event
+	for i := range events {
+		if events[i].Event == audit.EventRenew {
+			renewEvent = &events[i]
+			break
+		}
+	}
+	if renewEvent == nil {
+		t.Fatal("No renew event found in audit log for reentrant acquire")
+	}
+	if renewEvent.LockID != origID {
+		t.Errorf("Reentrant renew event LockID = %q, want %q", renewEvent.LockID, origID)
+	}
+}
+
+func TestLockID_BackwardCompat(t *testing.T) {
+	root := t.TempDir()
+	auditor := audit.NewWriter(root)
+
+	// Create a pre-ao9 lockfile (no lock_id) manually
+	locksDir := filepath.Join(root, "locks")
+	if err := os.MkdirAll(locksDir, 0750); err != nil {
+		t.Fatalf("MkdirAll error = %v", err)
+	}
+
+	id := identity.Current()
+	oldLock := &lockfile.Lock{
+		Version:    1,
+		Name:       "old-lock",
+		Owner:      id.Owner,
+		Host:       id.Host,
+		PID:        id.PID,
+		AcquiredAt: time.Now(),
+		TTLSec:     300,
+	}
+	path := filepath.Join(locksDir, "old-lock.json")
+	if err := lockfile.Write(path, oldLock); err != nil {
+		t.Fatalf("Write lock error = %v", err)
+	}
+
+	// Renew old lock — should work, lock_id stays empty
+	err := Renew(root, "old-lock", RenewOptions{Auditor: auditor})
+	if err != nil {
+		t.Fatalf("Renew() error = %v", err)
+	}
+
+	// Lock_id should still be empty after renew of pre-ao9 lock
+	lk, err := lockfile.Read(path)
+	if err != nil {
+		t.Fatalf("Read lock after renew error = %v", err)
+	}
+	if lk.LockID != "" {
+		t.Errorf("LockID should be empty for renewed pre-ao9 lock, got %q", lk.LockID)
+	}
+
+	// Renew event should have empty lock_id (omitted from JSON)
+	events := readAuditEvents(t, root)
+	if len(events) == 0 {
+		t.Fatal("Expected at least 1 audit event")
+	}
+	lastEvent := events[len(events)-1]
+	if lastEvent.LockID != "" {
+		t.Errorf("Renew event LockID should be empty for pre-ao9 lock, got %q", lastEvent.LockID)
+	}
+}
+
+func TestLockID_UniquePerAcquisition(t *testing.T) {
+	root := t.TempDir()
+	auditor := audit.NewWriter(root)
+
+	// Acquire, release, acquire again — should get different lock_ids
+	err := Acquire(root, "unique-lid", AcquireOptions{Auditor: auditor})
+	if err != nil {
+		t.Fatalf("Acquire() error = %v", err)
+	}
+	path := filepath.Join(root, "locks", "unique-lid.json")
+	lk1, err := lockfile.Read(path)
+	if err != nil {
+		t.Fatalf("Read lock error = %v", err)
+	}
+	id1 := lk1.LockID
+
+	err = Release(root, "unique-lid", ReleaseOptions{Auditor: auditor})
+	if err != nil {
+		t.Fatalf("Release() error = %v", err)
+	}
+
+	err = Acquire(root, "unique-lid", AcquireOptions{Auditor: auditor})
+	if err != nil {
+		t.Fatalf("Re-Acquire() error = %v", err)
+	}
+	lk2, err := lockfile.Read(path)
+	if err != nil {
+		t.Fatalf("Read lock error = %v", err)
+	}
+	id2 := lk2.LockID
+
+	if id1 == id2 {
+		t.Errorf("Different acquisitions should have different lock_ids, both got %q", id1)
+	}
+}

@@ -2,6 +2,8 @@
 package lockfile
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,6 +21,7 @@ const CurrentLockfileVersion = 1
 type Lock struct {
 	Version    int        `json:"version"`
 	Name       string     `json:"name"`
+	LockID     string     `json:"lock_id,omitempty"`
 	Owner      string     `json:"owner"`
 	Host       string     `json:"host"`
 	PID        int        `json:"pid"`
@@ -26,6 +29,18 @@ type Lock struct {
 	AcquiredAt time.Time  `json:"acquired_ts"`
 	TTLSec     int        `json:"ttl_sec,omitempty"`
 	ExpiresAt  *time.Time `json:"expires_at,omitempty"`
+}
+
+// GenerateLockID returns a 32-character random hex string for use as a lock
+// correlation ID. Uses crypto/rand for uniqueness. Falls back to a
+// timestamp-based ID if the entropy source fails.
+func GenerateLockID() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		fmt.Fprintf(os.Stderr, "lokt: crypto/rand failed, using timestamp fallback: %v\n", err)
+		return fmt.Sprintf("%032x", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(b)
 }
 
 // IsExpired returns true if the lock has a TTL and it has elapsed.
