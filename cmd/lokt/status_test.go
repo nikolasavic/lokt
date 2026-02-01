@@ -468,11 +468,17 @@ func TestStatus_ListAll_PruneExpired(t *testing.T) {
 }
 
 func TestStatus_ListAll_FreezeLock(t *testing.T) {
-	_, locksDir := setupTestRoot(t)
+	rootDir, _ := setupTestRoot(t)
+
+	// Create freezes/ directory and write freeze there
+	freezesDir := filepath.Join(rootDir, "freezes")
+	if err := os.MkdirAll(freezesDir, 0700); err != nil {
+		t.Fatalf("mkdir freezes: %v", err)
+	}
 
 	hostname, _ := os.Hostname()
-	writeLockJSON(t, locksDir, "freeze-deploy.json", &lockfile.Lock{
-		Name:       "freeze-deploy",
+	writeLockJSON(t, freezesDir, "deploy.json", &lockfile.Lock{
+		Name:       "deploy",
 		Owner:      "admin",
 		Host:       hostname,
 		PID:        1,
@@ -568,11 +574,17 @@ func TestStatus_JSON_FieldsComplete(t *testing.T) {
 }
 
 func TestStatus_JSON_FreezeLock(t *testing.T) {
-	_, locksDir := setupTestRoot(t)
+	rootDir, _ := setupTestRoot(t)
+
+	// Create freezes/ directory and write freeze there
+	freezesDir := filepath.Join(rootDir, "freezes")
+	if err := os.MkdirAll(freezesDir, 0700); err != nil {
+		t.Fatalf("mkdir freezes: %v", err)
+	}
 
 	hostname, _ := os.Hostname()
-	writeLockJSON(t, locksDir, "freeze-db.json", &lockfile.Lock{
-		Name:       "freeze-db",
+	writeLockJSON(t, freezesDir, "db.json", &lockfile.Lock{
+		Name:       "db",
 		Owner:      "ops",
 		Host:       hostname,
 		PID:        1,
@@ -580,19 +592,22 @@ func TestStatus_JSON_FreezeLock(t *testing.T) {
 		TTLSec:     600,
 	})
 
-	stdout, _, code := captureCmd(cmdStatus, []string{"--json", "freeze-db"})
+	stdout, _, code := captureCmd(cmdStatus, []string{"--json"})
 	if code != ExitOK {
 		t.Errorf("expected exit %d, got %d", ExitOK, code)
 	}
 
-	var out statusOutput
+	var out []statusOutput
 	if err := json.Unmarshal([]byte(stdout), &out); err != nil {
 		t.Fatalf("invalid JSON: %v\noutput: %s", err, stdout)
 	}
-	if !out.Freeze {
-		t.Error("expected freeze=true for freeze-prefixed lock")
+	if len(out) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(out))
 	}
-	if out.Name != "freeze-db" {
-		t.Errorf("expected name 'freeze-db', got %q", out.Name)
+	if !out[0].Freeze {
+		t.Error("expected freeze=true for freeze in freezes/ directory")
+	}
+	if out[0].Name != "db" {
+		t.Errorf("expected name 'db', got %q", out[0].Name)
 	}
 }
