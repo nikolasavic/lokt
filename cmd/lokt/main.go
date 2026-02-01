@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -814,7 +815,7 @@ func showLockBrief(rootDir, name string) {
 
 	age := time.Since(lf.AcquiredAt).Truncate(time.Second)
 	status := ""
-	if lock.IsFreezeLock(name) {
+	if strings.HasPrefix(name, lock.FreezePrefix) {
 		status = " [FROZEN]"
 	}
 	if lf.IsExpired() {
@@ -937,7 +938,7 @@ func lockToStatusOutput(lf *lockFile) statusOutput {
 	if lf.ExpiresAt != nil {
 		out.ExpiresAt = lf.ExpiresAt.Format(time.RFC3339)
 	}
-	if lock.IsFreezeLock(lf.Name) {
+	if strings.HasPrefix(lf.Name, lock.FreezePrefix) {
 		out.Freeze = true
 	}
 	return out
