@@ -3,6 +3,7 @@ package doctor
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -102,6 +103,66 @@ func TestCheckNetworkFS_LocalDir(t *testing.T) {
 	}
 	if result.Name != "network_fs" {
 		t.Errorf("CheckNetworkFS() name = %q, want %q", result.Name, "network_fs")
+	}
+}
+
+func TestCheckLegacyFreezes_None(t *testing.T) {
+	dir := t.TempDir()
+	locksDir := filepath.Join(dir, "locks")
+	if err := os.MkdirAll(locksDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	// Create a regular lock (not a freeze)
+	if err := os.WriteFile(filepath.Join(locksDir, "build.json"), []byte("{}"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	result := CheckLegacyFreezes(dir)
+	if result.Status != StatusOK {
+		t.Errorf("CheckLegacyFreezes() status = %v, want OK; message = %s", result.Status, result.Message)
+	}
+	if result.Name != "legacy_freezes" {
+		t.Errorf("CheckLegacyFreezes() name = %q, want %q", result.Name, "legacy_freezes")
+	}
+}
+
+func TestCheckLegacyFreezes_Present(t *testing.T) {
+	dir := t.TempDir()
+	locksDir := filepath.Join(dir, "locks")
+	if err := os.MkdirAll(locksDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	// Create legacy freeze files
+	for _, name := range []string{"freeze-deploy.json", "freeze-build.json"} {
+		if err := os.WriteFile(filepath.Join(locksDir, name), []byte("{}"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Also a regular lock that should not be counted
+	if err := os.WriteFile(filepath.Join(locksDir, "build.json"), []byte("{}"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	result := CheckLegacyFreezes(dir)
+	if result.Status != StatusWarn {
+		t.Errorf("CheckLegacyFreezes() status = %v, want Warn", result.Status)
+	}
+	if result.Message == "" {
+		t.Error("CheckLegacyFreezes() message is empty, want warning with count")
+	}
+	// Should mention count of 2
+	if !strings.Contains(result.Message, "2 legacy freeze") {
+		t.Errorf("CheckLegacyFreezes() message = %q, want mention of 2 files", result.Message)
+	}
+}
+
+func TestCheckLegacyFreezes_MissingDir(t *testing.T) {
+	dir := t.TempDir()
+	// Don't create locks/ directory at all
+
+	result := CheckLegacyFreezes(dir)
+	if result.Status != StatusOK {
+		t.Errorf("CheckLegacyFreezes() status = %v, want OK for missing dir", result.Status)
 	}
 }
 

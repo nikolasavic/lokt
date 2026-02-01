@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -120,5 +121,43 @@ func CheckClock() CheckResult {
 	}
 
 	result.Status = StatusOK
+	return result
+}
+
+// CheckLegacyFreezes warns if the locks/ directory contains freeze-*.json files
+// from before the freeze namespace separation. These legacy files will expire
+// via TTL; new freezes are written to the freezes/ directory.
+func CheckLegacyFreezes(dir string) CheckResult {
+	result := CheckResult{Name: "legacy_freezes"}
+
+	locksDir := filepath.Join(dir, "locks")
+	entries, err := os.ReadDir(locksDir)
+	if err != nil {
+		// Directory missing or unreadable — no legacy files
+		result.Status = StatusOK
+		return result
+	}
+
+	var count int
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if strings.HasPrefix(name, "freeze-") && strings.HasSuffix(name, ".json") {
+			count++
+		}
+	}
+
+	if count == 0 {
+		result.Status = StatusOK
+		return result
+	}
+
+	result.Status = StatusWarn
+	result.Message = fmt.Sprintf(
+		"%d legacy freeze file(s) in locks/ directory. These will expire via TTL. New freezes use freezes/ directory.",
+		count,
+	)
 	return result
 }

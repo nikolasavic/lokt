@@ -1690,6 +1690,7 @@ func cmdDoctor(args []string) int {
 		doctor.CheckWritable(rootPath),
 		doctor.CheckNetworkFS(rootPath),
 		doctor.CheckClock(),
+		doctor.CheckLegacyFreezes(rootPath),
 	}
 
 	overall := doctor.Overall(results)
