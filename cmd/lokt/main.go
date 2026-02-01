@@ -878,6 +878,7 @@ func readLockFile(path string) (*lockFile, error) {
 }
 
 type lockFile struct {
+	Version    int       `json:"version"`
 	Name       string    `json:"name"`
 	Owner      string    `json:"owner"`
 	Host       string    `json:"host"`
@@ -889,6 +890,7 @@ type lockFile struct {
 
 // statusOutput is the JSON structure for status --json output.
 type statusOutput struct {
+	Version    int    `json:"version"`
 	Name       string `json:"name"`
 	Owner      string `json:"owner"`
 	Host       string `json:"host"`
@@ -904,6 +906,7 @@ type statusOutput struct {
 
 func lockToStatusOutput(lf *lockFile) statusOutput {
 	out := statusOutput{
+		Version:    lf.Version,
 		Name:       lf.Name,
 		Owner:      lf.Owner,
 		Host:       lf.Host,
@@ -1593,10 +1596,11 @@ func pidLivenessFromLock(lf *lockfile.Lock) string {
 
 // doctorOutput is the JSON structure for doctor command output.
 type doctorOutput struct {
-	RootMethod string               `json:"root_method"`
-	RootPath   string               `json:"root_path"`
-	Checks     []doctor.CheckResult `json:"checks"`
-	Overall    doctor.Status        `json:"overall"`
+	ProtocolVersion int                  `json:"protocol_version"`
+	RootMethod      string               `json:"root_method"`
+	RootPath        string               `json:"root_path"`
+	Checks          []doctor.CheckResult `json:"checks"`
+	Overall         doctor.Status        `json:"overall"`
 }
 
 func cmdDoctor(args []string) int {
@@ -1622,10 +1626,11 @@ func cmdDoctor(args []string) int {
 
 	if *jsonOutput {
 		output := doctorOutput{
-			RootMethod: method.String(),
-			RootPath:   rootPath,
-			Checks:     results,
-			Overall:    overall,
+			ProtocolVersion: lockfile.CurrentLockfileVersion,
+			RootMethod:      method.String(),
+			RootPath:        rootPath,
+			Checks:          results,
+			Overall:         overall,
 		}
 		data, _ := json.MarshalIndent(output, "", "  ")
 		fmt.Println(string(data))

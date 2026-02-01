@@ -57,6 +57,7 @@ func Acquire(rootDir, name string, opts AcquireOptions) error {
 	id := identity.Current()
 
 	lock := &lockfile.Lock{
+		Version:    lockfile.CurrentLockfileVersion,
 		Name:       name,
 		Owner:      id.Owner,
 		Host:       id.Host,

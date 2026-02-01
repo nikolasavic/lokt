@@ -68,6 +68,7 @@ func Freeze(rootDir, name string, opts FreezeOptions) error {
 	id := identity.Current()
 
 	lock := &lockfile.Lock{
+		Version:    lockfile.CurrentLockfileVersion,
 		Name:       freezeName,
 		Owner:      id.Owner,
 		Host:       id.Host,

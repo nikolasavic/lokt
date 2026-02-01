@@ -296,3 +296,166 @@ func TestWriteOmitsPIDStartNS_WhenZero(t *testing.T) {
 		t.Error("pid_start_ns should be omitted when zero (omitempty)")
 	}
 }
+
+func TestWriteAndRead_Version(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.lock")
+
+	lock := &Lock{
+		Version:    CurrentLockfileVersion,
+		Name:       "test",
+		Owner:      "testuser",
+		Host:       "testhost",
+		PID:        12345,
+		AcquiredAt: time.Now().Truncate(time.Millisecond),
+		TTLSec:     300,
+	}
+
+	if err := Write(path, lock); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+
+	got, err := Read(path)
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+
+	if got.Version != CurrentLockfileVersion {
+		t.Errorf("Version = %d, want %d", got.Version, CurrentLockfileVersion)
+	}
+}
+
+func TestRead_BackwardCompat_NoVersion(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "old.lock")
+
+	// Pre-v1.0 lockfile with no version field
+	oldJSON := `{
+  "name": "test",
+  "owner": "testuser",
+  "host": "testhost",
+  "pid": 12345,
+  "acquired_ts": "2026-01-28T10:00:00Z",
+  "ttl_sec": 300
+}`
+	if err := os.WriteFile(path, []byte(oldJSON), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := Read(path)
+	if err != nil {
+		t.Fatalf("Read() should accept lockfile without version, got error: %v", err)
+	}
+
+	if got.Version != 0 {
+		t.Errorf("Version should be 0 for old lockfile, got %d", got.Version)
+	}
+	if got.Name != "test" {
+		t.Errorf("Name = %q, want %q", got.Name, "test")
+	}
+}
+
+func TestRead_UnsupportedVersion(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "future.lock")
+
+	futureJSON := `{
+  "version": 99,
+  "name": "test",
+  "owner": "testuser",
+  "host": "testhost",
+  "pid": 12345,
+  "acquired_ts": "2026-01-28T10:00:00Z"
+}`
+	if err := os.WriteFile(path, []byte(futureJSON), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := Read(path)
+	if err == nil {
+		t.Fatal("Read() should reject lockfile with unsupported version")
+	}
+	if !errors.Is(err, ErrUnsupportedVersion) {
+		t.Errorf("Read() error should wrap ErrUnsupportedVersion, got %v", err)
+	}
+}
+
+func TestWriteAlwaysIncludesVersion(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "ver.lock")
+
+	lock := &Lock{
+		Version:    CurrentLockfileVersion,
+		Name:       "test",
+		Owner:      "testuser",
+		Host:       "testhost",
+		PID:        12345,
+		AcquiredAt: time.Now().Truncate(time.Millisecond),
+	}
+
+	if err := Write(path, lock); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+
+	if _, exists := raw["version"]; !exists {
+		t.Error("version field should always be present in JSON (no omitempty)")
+	}
+}
+
+func TestVersionIsFirstJSONField(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "order.lock")
+
+	lock := &Lock{
+		Version:    CurrentLockfileVersion,
+		Name:       "test",
+		Owner:      "testuser",
+		Host:       "testhost",
+		PID:        12345,
+		AcquiredAt: time.Now().Truncate(time.Millisecond),
+	}
+
+	if err := Write(path, lock); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+
+	// In JSON output, "version" should appear before "name"
+	str := string(data)
+	vIdx := indexOf(str, `"version"`)
+	nIdx := indexOf(str, `"name"`)
+
+	if vIdx < 0 {
+		t.Fatal("version field not found in JSON")
+	}
+	if nIdx < 0 {
+		t.Fatal("name field not found in JSON")
+	}
+	if vIdx >= nIdx {
+		t.Errorf("version field (pos %d) should appear before name field (pos %d) in JSON", vIdx, nIdx)
+	}
+}
+
+// indexOf returns the byte offset of the first occurrence of substr in s, or -1.
+func indexOf(s, substr string) int {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return i
+		}
+	}
+	return -1
+}

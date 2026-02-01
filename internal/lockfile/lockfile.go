@@ -12,8 +12,12 @@ import (
 	"time"
 )
 
+// CurrentLockfileVersion is the schema version written to all new lock files.
+const CurrentLockfileVersion = 1
+
 // Lock represents the JSON structure of a lock file.
 type Lock struct {
+	Version    int       `json:"version"`
 	Name       string    `json:"name"`
 	Owner      string    `json:"owner"`
 	Host       string    `json:"host"`
@@ -41,6 +45,9 @@ var ErrInvalidName = errors.New("invalid lock name")
 
 // ErrCorrupted is returned when a lock file exists but contains malformed JSON.
 var ErrCorrupted = errors.New("corrupted lock file")
+
+// ErrUnsupportedVersion is returned when a lock file has a version newer than this binary supports.
+var ErrUnsupportedVersion = errors.New("unsupported lockfile version")
 
 // validNamePattern matches allowed lock name characters: alphanumeric, dots, hyphens, underscores.
 var validNamePattern = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
@@ -87,6 +94,10 @@ func Read(path string) (*Lock, error) {
 	var lock Lock
 	if err := json.Unmarshal(data, &lock); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrCorrupted, err)
+	}
+	if lock.Version > CurrentLockfileVersion {
+		return nil, fmt.Errorf("%w: version %d not supported (max: %d); upgrade lokt",
+			ErrUnsupportedVersion, lock.Version, CurrentLockfileVersion)
 	}
 	return &lock, nil
 }

@@ -36,7 +36,8 @@ func Renew(rootDir, name string, opts RenewOptions) error {
 			ErrLockStolen, existing.Owner, existing.Host, existing.PID)
 	}
 
-	// Update timestamp and rewrite atomically
+	// Update timestamp and version, then rewrite atomically
+	existing.Version = lockfile.CurrentLockfileVersion
 	existing.AcquiredAt = time.Now()
 	if err := lockfile.Write(path, existing); err != nil {
 		return fmt.Errorf("write lock: %w", err)
