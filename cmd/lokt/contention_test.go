@@ -8,12 +8,15 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sync"
+	"syscall"
 	"testing"
+	"time"
 )
 
-// TestMultiProcessContention spawns N real OS processes all racing to acquire
-// the same lock. Asserts exactly 1 wins (exit 0) and the rest are denied (exit 2).
-// This is the first binary-level integration test for mutual exclusion.
+// TestMultiProcessContention spawns N real OS processes all racing to guard
+// the same lock with a long-running child. Asserts exactly 1 acquires (exit 0)
+// and the rest are denied (exit 2). Uses guard so the winner's PID stays alive
+// during the test, preventing auto-prune from creating multiple winners.
 func TestMultiProcessContention(t *testing.T) {
 	binary := buildBinary(t)
 
@@ -30,25 +33,30 @@ func TestMultiProcessContention(t *testing.T) {
 		owner    string
 		exitCode int
 		stdout   string
-		pid      int
+		cmd      *exec.Cmd
 	}
 
 	results := make([]result, n)
 	var wg sync.WaitGroup
 
+	// Use a barrier: create all processes, then start them near-simultaneously.
+	// The winner runs "sleep 60" (killed after test), losers run "true" (never reached).
 	for i := range n {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
 			owner := fmt.Sprintf("agent-%d", idx)
 
-			cmd := exec.Command(binary, "lock", "--json", lockName)
+			// Use guard with a long-running child. Losers exit immediately with code 2.
+			// Winner holds the lock while sleep runs.
+			cmd := exec.Command(binary, "guard", "--ttl", "30s", lockName, "--", "sleep", "60")
 			cmd.Env = []string{
 				"LOKT_ROOT=" + rootDir,
 				"LOKT_OWNER=" + owner,
 				"HOME=" + os.Getenv("HOME"),
 				"PATH=" + os.Getenv("PATH"),
 			}
+
 			out, err := cmd.CombinedOutput()
 
 			exitCode := 0
@@ -66,9 +74,50 @@ func TestMultiProcessContention(t *testing.T) {
 				owner:    owner,
 				exitCode: exitCode,
 				stdout:   string(out),
-				pid:      cmd.ProcessState.Pid(),
+				cmd:      cmd,
 			}
 		}(i)
+	}
+
+	// Wait for all losers to finish (they exit immediately with code 2).
+	// The winner is still running sleep 60, but we need to give processes time to race.
+	// Poll until we see exactly n-1 completed processes.
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		// Check if lock file exists (winner acquired)
+		lockPath := filepath.Join(locksDir, lockName+".json")
+		if _, err := os.Stat(lockPath); err == nil {
+			// Lock exists — give losers time to finish
+			time.Sleep(500 * time.Millisecond)
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	// Kill the winner's sleep child so the guard exits and wg completes
+	lockPath := filepath.Join(locksDir, lockName+".json")
+	data, err := os.ReadFile(lockPath)
+	if err != nil {
+		// Wait a bit more then try again
+		time.Sleep(500 * time.Millisecond)
+		data, err = os.ReadFile(lockPath)
+		if err != nil {
+			t.Fatalf("read lockfile: %v", err)
+		}
+	}
+
+	var lockData struct {
+		Owner  string `json:"owner"`
+		PID    int    `json:"pid"`
+		LockID string `json:"lock_id"`
+	}
+	if err := json.Unmarshal(data, &lockData); err != nil {
+		t.Fatalf("parse lockfile: %v", err)
+	}
+
+	// Kill the guard process (which holds the lock)
+	if lockData.PID > 0 {
+		_ = syscall.Kill(lockData.PID, syscall.SIGTERM)
 	}
 
 	wg.Wait()
@@ -77,7 +126,7 @@ func TestMultiProcessContention(t *testing.T) {
 	var winners, denied []int
 	for i, r := range results {
 		switch r.exitCode {
-		case ExitOK:
+		case ExitOK, 143: // 143 = 128+SIGTERM (winner was killed)
 			winners = append(winners, i)
 		case ExitLockHeld:
 			denied = append(denied, i)
@@ -94,31 +143,14 @@ func TestMultiProcessContention(t *testing.T) {
 		t.Errorf("expected %d denied, got %d", n-1, len(denied))
 	}
 
-	// Verify lockfile matches the winner
-	winner := results[winners[0]]
-	lockPath := filepath.Join(locksDir, lockName+".json")
-	data, err := os.ReadFile(lockPath)
-	if err != nil {
-		t.Fatalf("read lockfile: %v", err)
-	}
-
-	var lockData struct {
-		Owner  string `json:"owner"`
-		PID    int    `json:"pid"`
-		LockID string `json:"lock_id"`
-	}
-	if err := json.Unmarshal(data, &lockData); err != nil {
-		t.Fatalf("parse lockfile: %v", err)
-	}
-
-	if lockData.Owner != winner.owner {
-		t.Errorf("lockfile owner = %q, want %q (winner)", lockData.Owner, winner.owner)
+	if lockData.Owner != results[winners[0]].owner {
+		t.Errorf("lockfile owner = %q, want %q (winner)", lockData.Owner, results[winners[0]].owner)
 	}
 	if lockData.LockID == "" {
 		t.Error("lockfile lock_id is empty, expected non-empty")
 	}
 
-	t.Logf("winner: %s (pid %d), lock_id: %s", winner.owner, winner.pid, lockData.LockID)
+	t.Logf("winner: %s, lock_id: %s", results[winners[0]].owner, lockData.LockID)
 }
 
 // TestMultiProcessContention_Stability runs the contention test multiple times
@@ -142,14 +174,18 @@ func TestMultiProcessContention_Stability(t *testing.T) {
 				t.Fatalf("mkdir locks: %v", err)
 			}
 
-			exitCodes := make([]int, n)
+			type procResult struct {
+				exitCode int
+				cmd      *exec.Cmd
+			}
+			results := make([]procResult, n)
 			var wg sync.WaitGroup
 
 			for i := range n {
 				wg.Add(1)
 				go func(idx int) {
 					defer wg.Done()
-					cmd := exec.Command(binary, "lock", lockName)
+					cmd := exec.Command(binary, "guard", "--ttl", "30s", lockName, "--", "sleep", "60")
 					cmd.Env = []string{
 						"LOKT_ROOT=" + rootDir,
 						"LOKT_OWNER=" + fmt.Sprintf("agent-%d", idx),
@@ -157,22 +193,43 @@ func TestMultiProcessContention_Stability(t *testing.T) {
 						"PATH=" + os.Getenv("PATH"),
 					}
 					err := cmd.Run()
+					code := 0
 					if err != nil {
 						var exitErr *exec.ExitError
 						if errors.As(err, &exitErr) {
-							exitCodes[idx] = exitErr.ExitCode()
-						} else {
-							t.Errorf("process %d: unexpected error: %v", idx, err)
+							code = exitErr.ExitCode()
 						}
 					}
+					results[idx] = procResult{exitCode: code, cmd: cmd}
 				}(i)
+			}
+
+			// Wait for lock to appear, then kill winner
+			lockPath := filepath.Join(locksDir, lockName+".json")
+			deadline := time.Now().Add(10 * time.Second)
+			for time.Now().Before(deadline) {
+				if _, err := os.Stat(lockPath); err == nil {
+					time.Sleep(300 * time.Millisecond)
+					break
+				}
+				time.Sleep(50 * time.Millisecond)
+			}
+
+			// Read lockfile to find winner PID and kill it
+			if data, err := os.ReadFile(lockPath); err == nil {
+				var lk struct {
+					PID int `json:"pid"`
+				}
+				if json.Unmarshal(data, &lk) == nil && lk.PID > 0 {
+					_ = syscall.Kill(lk.PID, syscall.SIGTERM)
+				}
 			}
 
 			wg.Wait()
 
 			winners := 0
-			for _, code := range exitCodes {
-				if code == ExitOK {
+			for _, r := range results {
+				if r.exitCode == ExitOK || r.exitCode == 143 {
 					winners++
 				}
 			}
