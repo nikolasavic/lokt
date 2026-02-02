@@ -16,9 +16,9 @@ configured, and an install script exists.
 `expires_at` timestamp, freeze namespace separation, and `lock_id` audit
 correlation are all shipped and verified.
 
-**M1 is in progress.** Exit code contract tests and renewal-under-contention
-tests are done. Multi-process contention, guard release-on-failure, and root
-discovery coverage remain.
+**M1 is in progress.** Exit code contract tests, renewal-under-contention,
+multi-process contention, and guard release-on-failure tests are all done.
+Root discovery coverage remains.
 
 ---
 
@@ -48,8 +48,8 @@ is a lock manager nobody should trust in production.
 
 | Item | Ticket/Bead | Status | Description | Risk if skipped |
 |------|-------------|--------|-------------|-----------------|
-| Multi-process contention test | L-183 | ⬜ Todo | Spawn N real `lokt lock` processes, assert exactly 1 wins. Not goroutines — actual OS processes. | The core promise (mutual exclusion) is only tested in-process. A serialization bug in the CLI layer would go undetected. |
-| Guard release-on-failure test | L-184 | ⬜ Todo | `lokt guard build -- false` must release the lock and exit non-zero. Test with SIGTERM too. | Guard is the primary UX. If it leaks locks on failure, every CI pipeline using it accumulates stale locks. |
+| Multi-process contention test | L-183 / lokt-xmp | ✅ Done | 10 real OS processes race via `lokt guard`, assert exactly 1 wins. Stability test runs 10 rounds. | The core promise (mutual exclusion) is only tested in-process. A serialization bug in the CLI layer would go undetected. |
+| Guard release-on-failure test | L-184 / lokt-1v1 | ✅ Done | Guard releases lock on child failure (exit 1, exit 42) and SIGTERM (exit 143). Lock file removal verified. | Guard is the primary UX. If it leaks locks on failure, every CI pipeline using it accumulates stale locks. |
 | Exit code contract test | lokt-6cn | ✅ Done | Table-driven test covering every exit code path across all commands. 21 test cases in `exitcode_test.go`. | Exit codes are API. Scripts depend on `$?`. A refactor that changes exit 2→1 silently breaks every caller. |
 | Renewal-under-contention test | lokt-36j | ✅ Done | Short-TTL guard with a contender trying `--break-stale`. Heartbeat prevents the break. | The heartbeat/stale-break interaction is the most complex race in the codebase. Untested = unknown. |
 | Root discovery coverage | — | ⬜ Todo | Increase `internal/root` test coverage from 30% to 70%+. Cover LOKT_ROOT, git common dir, .lokt/ fallback, and error paths. | Root discovery bugs mean locks go to the wrong directory. Two processes "holding the same lock" in different dirs = no mutual exclusion. |
@@ -138,18 +138,15 @@ addressing them:
 1. ~~**Lock namespace collision with freeze prefix.**~~ ✅ Fixed (lokt-bzz).
    Freezes now live in `freezes/` directory, no naming collision possible.
 
-2. **No integration tests for the core promise.** We've tested that
-   `Acquire()` the Go function works. We haven't tested that `lokt lock`
-   the binary works when two processes race. That's the product.
-   *(M1 L-183 — still open)*
+2. ~~**No integration tests for the core promise.**~~ ✅ Fixed (L-183).
+   10-process contention test via `lokt guard` with stability runs.
 
 3. ~~**Schema without version field.**~~ ✅ Fixed (lokt-a7m).
    `"version": 1` in every lockfile, with read-time validation.
 
-4. **Guard leaking locks on unclean exit paths.** The code looks correct
-   (defer + signal handling), but it's only tested with goroutines, not
-   real signals to real processes. A leaked lock in CI means a stuck
-   pipeline and an angry user. *(M1 L-184 — still open)*
+4. ~~**Guard leaking locks on unclean exit paths.**~~ ✅ Fixed (L-184).
+   Child failure, exit code propagation, and SIGTERM all tested with real
+   processes.
 
 5. **Silent data loss if root discovery picks wrong directory.** Two
    processes in different working directories could resolve different
