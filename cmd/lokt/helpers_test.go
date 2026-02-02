@@ -3,13 +3,67 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/nikolasavic/lokt/internal/lockfile"
 )
+
+var (
+	buildOnce    sync.Once
+	builtBinary  string
+	errBuild     error
+	buildCleanup func()
+)
+
+// buildBinary compiles the lokt binary once per test run and returns
+// the path to the compiled executable. Calls t.Skip if the build fails.
+// The binary is cleaned up when the process exits via atexit-style cleanup.
+func buildBinary(t *testing.T) string {
+	t.Helper()
+	buildOnce.Do(func() {
+		dir, err := os.MkdirTemp("", "lokt-test-bin-*")
+		if err != nil {
+			errBuild = err
+			return
+		}
+		binPath := filepath.Join(dir, "lokt")
+		cmd := exec.Command("go", "build", "-o", binPath, ".")
+		cmd.Dir = filepath.Join(getModuleRoot(t), "cmd", "lokt")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			_ = os.RemoveAll(dir)
+			errBuild = fmt.Errorf("go build failed: %w\n%s", err, out)
+			return
+		}
+		builtBinary = binPath
+		buildCleanup = func() { _ = os.RemoveAll(dir) }
+	})
+	if errBuild != nil {
+		t.Skipf("cannot build lokt binary: %v", errBuild)
+	}
+	t.Cleanup(func() {
+		// Cleanup is called per-test but the binary persists across tests.
+		// Actual removal happens via buildCleanup at process exit (registered in TestMain).
+	})
+	return builtBinary
+}
+
+// getModuleRoot returns the Go module root directory.
+func getModuleRoot(t *testing.T) string {
+	t.Helper()
+	// cmd/lokt is two levels below module root
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	return filepath.Dir(filepath.Dir(wd))
+}
 
 // setupTestRoot creates a temp lokt root with locks/ dir and sets LOKT_ROOT.
 // Returns (rootDir, locksDir).
@@ -47,6 +101,15 @@ func captureCmd(fn func([]string) int, args []string) (string, string, int) {
 	_, _ = io.Copy(&errBuf, rErr)
 
 	return outBuf.String(), errBuf.String(), code
+}
+
+// TestMain runs the test suite and cleans up the compiled binary afterward.
+func TestMain(m *testing.M) {
+	code := m.Run()
+	if buildCleanup != nil {
+		buildCleanup()
+	}
+	os.Exit(code)
 }
 
 // writeLockJSON writes a lockfile.Lock as JSON to the locks dir.
