@@ -23,6 +23,28 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Build
+        run: |
+          VERSION="${GITHUB_REF_NAME}"
+          COMMIT="${GITHUB_SHA::7}"
+          go build -ldflags "-X main.version=$VERSION -X main.commit=$COMMIT" -o lokt ./cmd/lokt
+
+      - name: Smoke test
+        run: |
+          echo "=== Version ==="
+          ./lokt version
+
+          echo "=== Doctor ==="
+          ./lokt doctor
+
+          echo "=== Lock/Unlock cycle ==="
+          export LOKT_ROOT=$(mktemp -d)
+          mkdir -p "$LOKT_ROOT/locks"
+          ./lokt lock smoke-test --ttl 60s
+          ./lokt status smoke-test
+          ./lokt unlock smoke-test
+          echo "Smoke test passed"
+
       - name: Test
         run: go test -v -race ./...
 
