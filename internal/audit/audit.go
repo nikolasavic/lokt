@@ -71,7 +71,7 @@ func (w *Writer) Emit(e *Event) {
 
 	// O_APPEND is atomic on POSIX for writes smaller than PIPE_BUF (typically 4096 bytes).
 	// Our events are well under this limit.
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644) //nolint:gosec // G304: path is controlled
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600) //nolint:gosec // G304: path is controlled
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "lokt: audit open error: %v\n", err)
 		return
