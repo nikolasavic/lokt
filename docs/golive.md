@@ -52,7 +52,7 @@ is a lock manager nobody should trust in production.
 | Guard release-on-failure test | L-184 / lokt-1v1 | ✅ Done | Guard releases lock on child failure (exit 1, exit 42) and SIGTERM (exit 143). Lock file removal verified. | Guard is the primary UX. If it leaks locks on failure, every CI pipeline using it accumulates stale locks. |
 | Exit code contract test | lokt-6cn | ✅ Done | Table-driven test covering every exit code path across all commands. 21 test cases in `exitcode_test.go`. | Exit codes are API. Scripts depend on `$?`. A refactor that changes exit 2→1 silently breaks every caller. |
 | Renewal-under-contention test | lokt-36j | ✅ Done | Short-TTL guard with a contender trying `--break-stale`. Heartbeat prevents the break. | The heartbeat/stale-break interaction is the most complex race in the codebase. Untested = unknown. |
-| Root discovery coverage | — | ⬜ Todo | Increase `internal/root` test coverage from 30% to 70%+. Cover LOKT_ROOT, git common dir, .lokt/ fallback, and error paths. | Root discovery bugs mean locks go to the wrong directory. Two processes "holding the same lock" in different dirs = no mutual exclusion. |
+| Root discovery coverage | L-185 / lokt-eeu | ⬜ Todo | Increase `internal/root` test coverage from 45% to 70%+. Cover LOKT_ROOT, git common dir, .lokt/ fallback, and error paths. | Root discovery bugs mean locks go to the wrong directory. Two processes "holding the same lock" in different dirs = no mutual exclusion. |
 
 **Exit criteria:** `go test -race ./...` passes with all new tests.
 Coverage on `internal/lock` stays above 75%, `cmd/lokt` above 55%.
