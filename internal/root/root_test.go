@@ -2,7 +2,9 @@ package root
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -117,5 +119,211 @@ func TestLockFilePath(t *testing.T) {
 	want := root + string(filepath.Separator) + LocksDir + string(filepath.Separator) + "build.json"
 	if got != want {
 		t.Errorf("LockFilePath() = %q, want %q", got, want)
+	}
+}
+
+// initGitRepo creates a git repository in the given directory.
+// Returns an error if git init fails.
+func initGitRepo(t *testing.T, dir string) {
+	t.Helper()
+	cmd := exec.Command("git", "init")
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init failed: %v\noutput: %s", err, out)
+	}
+}
+
+// withWorkingDir temporarily changes the working directory for a test.
+// Returns a cleanup function that restores the original directory.
+func withWorkingDir(t *testing.T, dir string) func() {
+	t.Helper()
+	original, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("failed to get current dir: %v", err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("failed to change to dir %q: %v", dir, err)
+	}
+	return func() {
+		if err := os.Chdir(original); err != nil {
+			t.Errorf("failed to restore dir: %v", err)
+		}
+	}
+}
+
+func TestFindWithMethod_GitRepo(t *testing.T) {
+	// Ensure LOKT_ROOT is not set (so git path is tried)
+	if err := os.Unsetenv(EnvLoktRoot); err != nil {
+		t.Fatalf("failed to unset env: %v", err)
+	}
+
+	// Create a temp directory with a git repo
+	repoDir := t.TempDir()
+	initGitRepo(t, repoDir)
+
+	// Change to the git repo directory
+	cleanup := withWorkingDir(t, repoDir)
+	defer cleanup()
+
+	// FindWithMethod should discover the git root
+	path, method, err := FindWithMethod()
+	if err != nil {
+		t.Fatalf("FindWithMethod() error = %v", err)
+	}
+
+	if method != MethodGit {
+		t.Errorf("FindWithMethod() method = %v, want MethodGit", method)
+	}
+
+	// Path should end with /lokt (inside .git directory)
+	if !strings.HasSuffix(path, string(filepath.Separator)+"lokt") {
+		t.Errorf("FindWithMethod() path = %q, want suffix '/lokt'", path)
+	}
+
+	// Path should be inside the .git directory
+	// Note: On macOS, /var is symlinked to /private/var, so we resolve both paths
+	gitDir := filepath.Join(repoDir, ".git")
+	expectedPath := filepath.Join(gitDir, "lokt")
+	resolvedExpected, _ := filepath.EvalSymlinks(expectedPath)
+	resolvedActual, _ := filepath.EvalSymlinks(path)
+	if resolvedActual != resolvedExpected {
+		t.Errorf("FindWithMethod() path = %q (resolved: %q), want %q (resolved: %q)",
+			path, resolvedActual, expectedPath, resolvedExpected)
+	}
+}
+
+func TestFindWithMethod_GitRepo_Subdirectory(t *testing.T) {
+	// Ensure LOKT_ROOT is not set
+	if err := os.Unsetenv(EnvLoktRoot); err != nil {
+		t.Fatalf("failed to unset env: %v", err)
+	}
+
+	// Create a temp directory with a git repo and a subdirectory
+	repoDir := t.TempDir()
+	initGitRepo(t, repoDir)
+
+	subDir := filepath.Join(repoDir, "src", "pkg")
+	if err := os.MkdirAll(subDir, 0750); err != nil {
+		t.Fatalf("failed to create subdir: %v", err)
+	}
+
+	// Change to the subdirectory (still within the git repo)
+	cleanup := withWorkingDir(t, subDir)
+	defer cleanup()
+
+	// FindWithMethod should still discover the git root
+	path, method, err := FindWithMethod()
+	if err != nil {
+		t.Fatalf("FindWithMethod() error = %v", err)
+	}
+
+	if method != MethodGit {
+		t.Errorf("FindWithMethod() method = %v, want MethodGit", method)
+	}
+
+	// Path should point to <repo>/.git/lokt regardless of subdirectory
+	// Note: On macOS, /var is symlinked to /private/var, so we resolve both paths
+	gitDir := filepath.Join(repoDir, ".git")
+	expectedPath := filepath.Join(gitDir, "lokt")
+	resolvedExpected, _ := filepath.EvalSymlinks(expectedPath)
+	resolvedActual, _ := filepath.EvalSymlinks(path)
+	if resolvedActual != resolvedExpected {
+		t.Errorf("FindWithMethod() path = %q (resolved: %q), want %q (resolved: %q)",
+			path, resolvedActual, expectedPath, resolvedExpected)
+	}
+}
+
+func TestFindWithMethod_EnvVarOverridesGit(t *testing.T) {
+	// Create a git repo
+	repoDir := t.TempDir()
+	initGitRepo(t, repoDir)
+
+	cleanup := withWorkingDir(t, repoDir)
+	defer cleanup()
+
+	// Set LOKT_ROOT - should override git discovery
+	customPath := "/custom/lokt/root"
+	if err := os.Setenv(EnvLoktRoot, customPath); err != nil {
+		t.Fatalf("failed to set env: %v", err)
+	}
+	defer func() { _ = os.Unsetenv(EnvLoktRoot) }()
+
+	path, method, err := FindWithMethod()
+	if err != nil {
+		t.Fatalf("FindWithMethod() error = %v", err)
+	}
+
+	if method != MethodEnvVar {
+		t.Errorf("FindWithMethod() method = %v, want MethodEnvVar (env should override git)", method)
+	}
+
+	if path != customPath {
+		t.Errorf("FindWithMethod() path = %q, want %q", path, customPath)
+	}
+}
+
+func TestFindWithMethod_LocalFallback(t *testing.T) {
+	// Ensure LOKT_ROOT is not set
+	if err := os.Unsetenv(EnvLoktRoot); err != nil {
+		t.Fatalf("failed to unset env: %v", err)
+	}
+
+	// Create a temp directory that is NOT a git repo
+	nonGitDir := t.TempDir()
+
+	// Change to the non-git directory
+	cleanup := withWorkingDir(t, nonGitDir)
+	defer cleanup()
+
+	// FindWithMethod should fall back to local .lokt
+	path, method, err := FindWithMethod()
+	if err != nil {
+		t.Fatalf("FindWithMethod() error = %v", err)
+	}
+
+	if method != MethodLocalDir {
+		t.Errorf("FindWithMethod() method = %v, want MethodLocalDir", method)
+	}
+
+	// Path should be {cwd}/.lokt
+	// Note: On macOS, /var is symlinked to /private/var, so we resolve both paths
+	expectedPath := filepath.Join(nonGitDir, DirName)
+	resolvedExpected, _ := filepath.EvalSymlinks(expectedPath)
+	resolvedActual, _ := filepath.EvalSymlinks(path)
+	if resolvedActual != resolvedExpected {
+		t.Errorf("FindWithMethod() path = %q (resolved: %q), want %q (resolved: %q)",
+			path, resolvedActual, expectedPath, resolvedExpected)
+	}
+
+	// Path should end with .lokt
+	if !strings.HasSuffix(path, string(filepath.Separator)+DirName) {
+		t.Errorf("FindWithMethod() path = %q, want suffix '/%s'", path, DirName)
+	}
+}
+
+func TestEnsureDirs_PermissionDenied(t *testing.T) {
+	// Skip on root user (permission checks don't apply)
+	if os.Getuid() == 0 {
+		t.Skip("skipping permission test as root")
+	}
+
+	// Create a temp directory
+	parentDir := t.TempDir()
+
+	// Create a read-only directory
+	readOnlyDir := filepath.Join(parentDir, "readonly")
+	if err := os.Mkdir(readOnlyDir, 0500); err != nil {
+		t.Fatalf("failed to create read-only dir: %v", err)
+	}
+	// Ensure we can clean up
+	defer func() { _ = os.Chmod(readOnlyDir, 0700) }()
+
+	// Try to create directories inside the read-only directory
+	// This should fail with permission denied
+	rootPath := filepath.Join(readOnlyDir, "lokt")
+	err := EnsureDirs(rootPath)
+
+	if err == nil {
+		t.Error("EnsureDirs() expected error for read-only parent, got nil")
 	}
 }
