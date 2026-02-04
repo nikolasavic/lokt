@@ -59,6 +59,8 @@ func main() {
 		code = cmdUnlock(args)
 	case "status":
 		code = cmdStatus(args)
+	case "exists":
+		code = cmdExists(args)
 	case "guard":
 		code = cmdGuard(args)
 	case "freeze":
@@ -580,6 +582,31 @@ func cmdStatus(args []string) int {
 
 	if pruned > 0 && !*jsonOutput {
 		fmt.Printf("\npruned %d expired lock(s)\n", pruned)
+	}
+	return ExitOK
+}
+
+func cmdExists(args []string) int {
+	if len(args) != 1 {
+		fmt.Fprintf(os.Stderr, "usage: lokt exists <name>\n")
+		return ExitUsage
+	}
+
+	name := args[0]
+	if err := lockfile.ValidateName(name); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return ExitError
+	}
+
+	rootDir, err := root.Find()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return ExitError
+	}
+
+	lockPath := filepath.Join(rootDir, "locks", name+".json")
+	if _, err := os.Stat(lockPath); err != nil {
+		return ExitNotFound
 	}
 	return ExitOK
 }
