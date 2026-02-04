@@ -38,8 +38,9 @@ func (e *HeldError) Unwrap() error {
 
 // AcquireOptions configures lock acquisition.
 type AcquireOptions struct {
-	TTL     time.Duration
-	Auditor *audit.Writer // Optional audit writer for event logging
+	TTL      time.Duration
+	Metadata map[string]string // Optional key-value metadata to store with lock
+	Auditor  *audit.Writer     // Optional audit writer for event logging
 }
 
 // Acquire attempts to atomically acquire a lock.
@@ -72,6 +73,9 @@ func Acquire(rootDir, name string, opts AcquireOptions) error {
 		lock.TTLSec = int(opts.TTL.Seconds())
 		exp := lock.AcquiredAt.Add(time.Duration(lock.TTLSec) * time.Second)
 		lock.ExpiresAt = &exp
+	}
+	if len(opts.Metadata) > 0 {
+		lock.Metadata = opts.Metadata
 	}
 
 	// Try atomic create - fails if file exists

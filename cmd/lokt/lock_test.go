@@ -205,3 +205,75 @@ func TestLock_WithoutJSON_Unchanged(t *testing.T) {
 		t.Error("stderr should not be valid JSON without --json flag")
 	}
 }
+
+func TestLock_WithMetadata(t *testing.T) {
+	rootDir, locksDir := setupTestRoot(t)
+
+	_, stderr, code := captureCmd(cmdLock, []string{
+		"--meta", "path=/tmp/out.txt",
+		"--meta", "commit=abc123",
+		"meta-test",
+	})
+	if code != ExitOK {
+		t.Fatalf("expected exit %d, got %d; stderr: %s", ExitOK, code, stderr)
+	}
+
+	// Read the lockfile and verify metadata
+	lf, err := lockfile.Read(locksDir + "/meta-test.json")
+	if err != nil {
+		t.Fatalf("failed to read lockfile: %v", err)
+	}
+	if lf.Metadata == nil {
+		t.Fatal("expected metadata to be set")
+	}
+	if lf.Metadata["path"] != "/tmp/out.txt" {
+		t.Errorf("expected path=/tmp/out.txt, got %q", lf.Metadata["path"])
+	}
+	if lf.Metadata["commit"] != "abc123" {
+		t.Errorf("expected commit=abc123, got %q", lf.Metadata["commit"])
+	}
+	_ = rootDir // used by setupTestRoot
+}
+
+func TestLock_MetadataLastWins(t *testing.T) {
+	_, locksDir := setupTestRoot(t)
+
+	_, stderr, code := captureCmd(cmdLock, []string{
+		"--meta", "key=first",
+		"--meta", "key=second",
+		"dupe-test",
+	})
+	if code != ExitOK {
+		t.Fatalf("expected exit %d, got %d; stderr: %s", ExitOK, code, stderr)
+	}
+
+	lf, err := lockfile.Read(locksDir + "/dupe-test.json")
+	if err != nil {
+		t.Fatalf("failed to read lockfile: %v", err)
+	}
+	if lf.Metadata["key"] != "second" {
+		t.Errorf("expected last value 'second', got %q", lf.Metadata["key"])
+	}
+}
+
+func TestLock_MetadataInvalidFormat(t *testing.T) {
+	setupTestRoot(t)
+
+	// Flag parsing will fail, but we need to check the error
+	// Since flag.ExitOnError is used, we can't directly test this via captureCmd
+	// Instead, test the metaFlag type directly
+	var m metaFlag
+
+	if err := m.Set("noequals"); err == nil {
+		t.Error("expected error for missing '='")
+	}
+	if err := m.Set("=value"); err == nil {
+		t.Error("expected error for empty key")
+	}
+	if err := m.Set("key="); err != nil {
+		t.Errorf("empty value should be allowed, got error: %v", err)
+	}
+	if m.data["key"] != "" {
+		t.Errorf("expected empty string for key=, got %q", m.data["key"])
+	}
+}

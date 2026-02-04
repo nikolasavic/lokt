@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -95,6 +96,7 @@ func usage() {
 	fmt.Println("    --ttl duration      Lock TTL (e.g., 5m, 1h)")
 	fmt.Println("    --wait              Wait for lock to be free")
 	fmt.Println("    --timeout duration  Maximum wait time (requires --wait)")
+	fmt.Println("    --meta key=value    Store metadata (repeatable)")
 	fmt.Println("    --json              Output JSON on acquire or deny")
 	fmt.Println("  unlock <name>     Release a lock")
 	fmt.Println("    --force         Remove without ownership check (break-glass)")
@@ -145,16 +147,46 @@ func warnNetworkFS(rootDir string) {
 	}
 }
 
+// metaFlag collects repeatable --meta key=value flags into a map.
+// Last value wins for duplicate keys.
+type metaFlag struct {
+	data map[string]string
+}
+
+func (m *metaFlag) String() string {
+	return fmt.Sprintf("%v", m.data)
+}
+
+func (m *metaFlag) Set(value string) error {
+	if m.data == nil {
+		m.data = make(map[string]string)
+	}
+	// Split on first '=' only (value may contain '=')
+	idx := strings.Index(value, "=")
+	if idx < 0 {
+		return fmt.Errorf("invalid format: expected key=value, got %q", value)
+	}
+	key := value[:idx]
+	val := value[idx+1:]
+	if key == "" {
+		return fmt.Errorf("invalid format: key cannot be empty")
+	}
+	m.data[key] = val
+	return nil
+}
+
 func cmdLock(args []string) int {
 	fs := flag.NewFlagSet("lock", flag.ExitOnError)
 	ttl := fs.Duration("ttl", 0, "Lock TTL (e.g., 5m, 1h)")
 	wait := fs.Bool("wait", false, "Wait for lock to be free")
 	timeout := fs.Duration("timeout", 0, "Maximum time to wait (requires --wait)")
 	jsonOutput := fs.Bool("json", false, "Output JSON on acquire or deny")
+	var meta metaFlag
+	fs.Var(&meta, "meta", "Metadata key=value (repeatable)")
 	_ = fs.Parse(args)
 
 	if fs.NArg() < 1 {
-		fmt.Fprintln(os.Stderr, "usage: lokt lock [--ttl duration] [--wait] [--timeout duration] [--json] <name>")
+		fmt.Fprintln(os.Stderr, "usage: lokt lock [--ttl duration] [--wait] [--timeout duration] [--meta key=value]... [--json] <name>")
 		return ExitUsage
 	}
 	name := fs.Arg(0)
@@ -182,7 +214,7 @@ func cmdLock(args []string) int {
 	warnNetworkFS(rootDir)
 
 	auditor := audit.NewWriter(rootDir)
-	opts := lock.AcquireOptions{TTL: *ttl, Auditor: auditor}
+	opts := lock.AcquireOptions{TTL: *ttl, Metadata: meta.data, Auditor: auditor}
 
 	if *wait {
 		ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
