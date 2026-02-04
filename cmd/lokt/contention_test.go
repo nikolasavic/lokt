@@ -207,8 +207,10 @@ func TestMultiProcessContention_Stability(t *testing.T) {
 			// Wait for lock to appear, then kill winner
 			lockPath := filepath.Join(locksDir, lockName+".json")
 			deadline := time.Now().Add(10 * time.Second)
+			lockFound := false
 			for time.Now().Before(deadline) {
 				if _, err := os.Stat(lockPath); err == nil {
+					lockFound = true
 					time.Sleep(300 * time.Millisecond)
 					break
 				}
@@ -216,26 +218,39 @@ func TestMultiProcessContention_Stability(t *testing.T) {
 			}
 
 			// Read lockfile to find winner PID and kill it
-			if data, err := os.ReadFile(lockPath); err == nil {
-				var lk struct {
-					PID int `json:"pid"`
+			// Retry a few times in case of transient read errors
+			var winnerPID int
+			for i := 0; i < 5 && lockFound; i++ {
+				if data, err := os.ReadFile(lockPath); err == nil {
+					var lk struct {
+						PID int `json:"pid"`
+					}
+					if json.Unmarshal(data, &lk) == nil && lk.PID > 0 {
+						winnerPID = lk.PID
+						break
+					}
 				}
-				if json.Unmarshal(data, &lk) == nil && lk.PID > 0 {
-					_ = syscall.Kill(lk.PID, syscall.SIGTERM)
-				}
+				time.Sleep(100 * time.Millisecond)
+			}
+			if winnerPID > 0 {
+				_ = syscall.Kill(winnerPID, syscall.SIGTERM)
 			}
 
 			wg.Wait()
 
+			// Count winners and collect exit codes for diagnostics
 			winners := 0
+			var exitCodes []int
 			for _, r := range results {
+				exitCodes = append(exitCodes, r.exitCode)
 				if r.exitCode == ExitOK || r.exitCode == 143 {
 					winners++
 				}
 			}
 
 			if winners != 1 {
-				t.Errorf("run %d: expected 1 winner, got %d", run, winners)
+				t.Errorf("run %d: expected 1 winner, got %d (lockFound=%v, winnerPID=%d, exitCodes=%v)",
+					run, winners, lockFound, winnerPID, exitCodes)
 			}
 		})
 	}
