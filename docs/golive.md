@@ -70,7 +70,7 @@ away and never come back.
 | Release pipeline dry-run | L-186/187 | ✅ Done | Goreleaser builds all 4 platforms, binaries work, checksums match. Tested with `v0.0.1-test`. | First real release fails publicly. Bad look. |
 | Install script end-to-end test | L-188 | ✅ Done | `scripts/install.sh` tested against release on Ubuntu + macOS. | Users run `curl \| sh` and it fails. Worst possible first impression. |
 | Homebrew formula | NEW | ⬜ Todo | `brew install lokt` or at minimum a tap. macOS developers expect this. | Friction for the largest desktop developer demographic. |
-| Binary smoke test in CI | NEW | ⬜ Todo | Post-build step that runs `./lokt version`, `./lokt doctor`, and a lock/unlock cycle against the built binary. | Goreleaser builds a binary that segfaults on startup. We don't find out until users do. |
+| Binary smoke test in CI | — | ✅ Done | Post-build step that runs `./lokt version`, `./lokt doctor`, and a lock/unlock cycle against the built binary. | Goreleaser builds a binary that segfaults on startup. We don't find out until users do. |
 
 **Exit criteria:** RC release exists on GitHub. `scripts/install.sh` works
 against it. At least one person outside the team has installed and run
@@ -89,7 +89,7 @@ rip it out and replace it with a bash `mkdir` lock.
 | Troubleshooting guide | NEW | ⬜ Todo | `docs/troubleshooting.md` — stale locks after crash, NFS warnings, permission errors, "lock held but process is dead", clock skew effects. | Users hit a problem, Google it, find nothing, give up. |
 | Document guard exit code propagation | — | ⬜ Todo | README doesn't mention that guard exits with the child's code (including 128+signal). Scripts depend on this. | Users write `lokt guard build -- make && deploy` and the deploy runs even when make fails because they didn't know guard preserves exit codes — wait, it does, but they need to know *how*. |
 | Threat model & scope doc | NEW | ⬜ Todo | One paragraph: lokt is for cooperative coordination on a single host/shared filesystem. It is not access control, not distributed consensus, not secure against malicious actors. | Someone uses lokt where they need flock or etcd, it fails, they blame lokt. Clear scope prevents misuse. |
-| Audit log permissions | — | ⬜ Todo | Create `audit.log` with 0600 instead of 0644. Lock files are fine as world-readable (status info), but audit events may contain operational details. | Audit log readable by any user on shared systems. Minor but looks sloppy for a "rock-solid" tool. |
+| Audit log permissions | — | ✅ Done | Create `audit.log` with 0600 instead of 0644. Lock files are fine as world-readable (status info), but audit events may contain operational details. | Audit log readable by any user on shared systems. Minor but looks sloppy for a "rock-solid" tool. |
 | `audit --tail` completion | L-172 | ✅ Done | `lokt audit --tail` is implemented and functional. | Half-shipped feature visible in `--help`. |
 
 **Exit criteria:** A new user can install lokt, hit a stale lock problem, and
