@@ -19,16 +19,17 @@ const CurrentLockfileVersion = 1
 
 // Lock represents the JSON structure of a lock file.
 type Lock struct {
-	Version    int        `json:"version"`
-	Name       string     `json:"name"`
-	LockID     string     `json:"lock_id,omitempty"`
-	Owner      string     `json:"owner"`
-	Host       string     `json:"host"`
-	PID        int        `json:"pid"`
-	PIDStartNS int64      `json:"pid_start_ns,omitempty"`
-	AcquiredAt time.Time  `json:"acquired_ts"`
-	TTLSec     int        `json:"ttl_sec,omitempty"`
-	ExpiresAt  *time.Time `json:"expires_at,omitempty"`
+	Version    int               `json:"version"`
+	Name       string            `json:"name"`
+	LockID     string            `json:"lock_id,omitempty"`
+	Owner      string            `json:"owner"`
+	Host       string            `json:"host"`
+	PID        int               `json:"pid"`
+	PIDStartNS int64             `json:"pid_start_ns,omitempty"`
+	AcquiredAt time.Time         `json:"acquired_ts"`
+	TTLSec     int               `json:"ttl_sec,omitempty"`
+	ExpiresAt  *time.Time        `json:"expires_at,omitempty"`
+	Metadata   map[string]string `json:"metadata,omitempty"`
 }
 
 // GenerateLockID returns a 32-character random hex string for use as a lock
