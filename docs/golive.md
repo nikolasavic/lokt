@@ -16,9 +16,9 @@ configured, and an install script exists.
 `expires_at` timestamp, freeze namespace separation, and `lock_id` audit
 correlation are all shipped and verified.
 
-**M1 is in progress.** Exit code contract tests, renewal-under-contention,
-multi-process contention, and guard release-on-failure tests are all done.
-Root discovery coverage remains.
+**M1 is complete.** All test confidence items are done: exit code contract,
+renewal-under-contention, multi-process contention, guard release-on-failure,
+and root discovery coverage (45% → 94%).
 
 ---
 
@@ -52,7 +52,7 @@ is a lock manager nobody should trust in production.
 | Guard release-on-failure test | L-184 / lokt-1v1 | ✅ Done | Guard releases lock on child failure (exit 1, exit 42) and SIGTERM (exit 143). Lock file removal verified. | Guard is the primary UX. If it leaks locks on failure, every CI pipeline using it accumulates stale locks. |
 | Exit code contract test | lokt-6cn | ✅ Done | Table-driven test covering every exit code path across all commands. 21 test cases in `exitcode_test.go`. | Exit codes are API. Scripts depend on `$?`. A refactor that changes exit 2→1 silently breaks every caller. |
 | Renewal-under-contention test | lokt-36j | ✅ Done | Short-TTL guard with a contender trying `--break-stale`. Heartbeat prevents the break. | The heartbeat/stale-break interaction is the most complex race in the codebase. Untested = unknown. |
-| Root discovery coverage | L-185 / lokt-eeu | ⬜ Todo | Increase `internal/root` test coverage from 45% to 70%+. Cover LOKT_ROOT, git common dir, .lokt/ fallback, and error paths. | Root discovery bugs mean locks go to the wrong directory. Two processes "holding the same lock" in different dirs = no mutual exclusion. |
+| Root discovery coverage | L-185 / lokt-eeu | ✅ Done | Increased `internal/root` test coverage from 45% to 94%. Covers LOKT_ROOT, git common dir, .lokt/ fallback, and error paths. | Root discovery bugs mean locks go to the wrong directory. Two processes "holding the same lock" in different dirs = no mutual exclusion. |
 
 **Exit criteria:** `go test -race ./...` passes with all new tests.
 Coverage on `internal/lock` stays above 75%, `cmd/lokt` above 55%.
@@ -148,7 +148,6 @@ addressing them:
    Child failure, exit code propagation, and SIGTERM all tested with real
    processes.
 
-5. **Silent data loss if root discovery picks wrong directory.** Two
-   processes in different working directories could resolve different
-   roots. Each thinks it holds "the" lock. Neither does. This needs
-   integration-level testing. *(M1 — still open)*
+5. ~~**Silent data loss if root discovery picks wrong directory.**~~ ✅ Fixed (L-185).
+   Root discovery now tested: git repo from subdirectory, local fallback,
+   env var precedence. Coverage 45% → 94%.
