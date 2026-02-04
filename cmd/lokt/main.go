@@ -62,6 +62,8 @@ func main() {
 		code = cmdStatus(args)
 	case "exists":
 		code = cmdExists(args)
+	case "get-meta":
+		code = cmdGetMeta(args)
 	case "guard":
 		code = cmdGuard(args)
 	case "freeze":
@@ -108,6 +110,8 @@ func usage() {
 	fmt.Println("    --json          Output in JSON format")
 	fmt.Println("    --prune-expired Remove expired locks while listing")
 	fmt.Println("  exists <name>     Check if lock exists (silent, exit code only)")
+	fmt.Println("  get-meta <name> <key>")
+	fmt.Println("                    Extract single metadata value from lock")
 	fmt.Println("  guard <name> -- <cmd...>")
 	fmt.Println("                    Run command while holding lock")
 	fmt.Println("    --ttl duration      Lock TTL (e.g., 5m, 1h)")
@@ -644,6 +648,52 @@ func cmdExists(args []string) int {
 	return ExitOK
 }
 
+func cmdGetMeta(args []string) int {
+	if len(args) != 2 {
+		fmt.Fprintln(os.Stderr, "usage: lokt get-meta <name> <key>")
+		return ExitUsage
+	}
+
+	name := args[0]
+	key := args[1]
+
+	if err := lockfile.ValidateName(name); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return ExitError
+	}
+
+	rootDir, err := root.Find()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return ExitError
+	}
+
+	lockPath := root.LockFilePath(rootDir, name)
+	lf, err := lockfile.Read(lockPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			fmt.Fprintf(os.Stderr, "error: lock %q not found\n", name)
+			return ExitNotFound
+		}
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return ExitError
+	}
+
+	if lf.Metadata == nil {
+		fmt.Fprintf(os.Stderr, "error: lock %q has no metadata\n", name)
+		return ExitError
+	}
+
+	val, ok := lf.Metadata[key]
+	if !ok {
+		fmt.Fprintf(os.Stderr, "error: metadata key %q not found\n", key)
+		return ExitError
+	}
+
+	fmt.Println(val)
+	return ExitOK
+}
+
 func cmdGuard(args []string) int {
 	// Find "--" separator
 	dashIdx := -1
@@ -985,32 +1035,34 @@ func readLockFile(path string) (*lockFile, error) {
 }
 
 type lockFile struct {
-	Version    int        `json:"version"`
-	Name       string     `json:"name"`
-	Owner      string     `json:"owner"`
-	Host       string     `json:"host"`
-	PID        int        `json:"pid"`
-	PIDStartNS int64      `json:"pid_start_ns,omitempty"`
-	AcquiredAt time.Time  `json:"acquired_ts"`
-	TTLSec     int        `json:"ttl_sec,omitempty"`
-	ExpiresAt  *time.Time `json:"expires_at,omitempty"`
+	Version    int               `json:"version"`
+	Name       string            `json:"name"`
+	Owner      string            `json:"owner"`
+	Host       string            `json:"host"`
+	PID        int               `json:"pid"`
+	PIDStartNS int64             `json:"pid_start_ns,omitempty"`
+	AcquiredAt time.Time         `json:"acquired_ts"`
+	TTLSec     int               `json:"ttl_sec,omitempty"`
+	ExpiresAt  *time.Time        `json:"expires_at,omitempty"`
+	Metadata   map[string]string `json:"metadata,omitempty"`
 }
 
 // statusOutput is the JSON structure for status --json output.
 type statusOutput struct {
-	Version    int    `json:"version"`
-	Name       string `json:"name"`
-	Owner      string `json:"owner"`
-	Host       string `json:"host"`
-	PID        int    `json:"pid"`
-	PIDStartNS int64  `json:"pid_start_ns,omitempty"`
-	AcquiredAt string `json:"acquired_ts"`
-	TTLSec     int    `json:"ttl_sec,omitempty"`
-	ExpiresAt  string `json:"expires_at,omitempty"`
-	AgeSec     int    `json:"age_sec"`
-	Expired    bool   `json:"expired"`
-	PIDStatus  string `json:"pid_status"`
-	Freeze     bool   `json:"freeze,omitempty"`
+	Version    int               `json:"version"`
+	Name       string            `json:"name"`
+	Owner      string            `json:"owner"`
+	Host       string            `json:"host"`
+	PID        int               `json:"pid"`
+	PIDStartNS int64             `json:"pid_start_ns,omitempty"`
+	AcquiredAt string            `json:"acquired_ts"`
+	TTLSec     int               `json:"ttl_sec,omitempty"`
+	ExpiresAt  string            `json:"expires_at,omitempty"`
+	AgeSec     int               `json:"age_sec"`
+	Expired    bool              `json:"expired"`
+	PIDStatus  string            `json:"pid_status"`
+	Freeze     bool              `json:"freeze,omitempty"`
+	Metadata   map[string]string `json:"metadata,omitempty"`
 }
 
 func lockToStatusOutput(lf *lockFile, isFreeze bool) statusOutput {
@@ -1026,6 +1078,7 @@ func lockToStatusOutput(lf *lockFile, isFreeze bool) statusOutput {
 		AgeSec:     int(time.Since(lf.AcquiredAt).Seconds()),
 		Expired:    lf.IsExpired(),
 		PIDStatus:  pidLiveness(lf),
+		Metadata:   lf.Metadata,
 	}
 	if lf.ExpiresAt != nil {
 		out.ExpiresAt = lf.ExpiresAt.Format(time.RFC3339)
