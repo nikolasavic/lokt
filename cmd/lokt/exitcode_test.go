@@ -116,6 +116,32 @@ func TestExitCodeContract(t *testing.T) {
 			wantCode: ExitNotFound,
 		},
 
+		// ── exists command ──────────────────────────────────────────
+		{
+			name: "exists/success",
+			cmd:  cmdExists,
+			args: []string{"mylock"},
+			setup: func(t *testing.T, _, locksDir string) {
+				writeLockJSON(t, locksDir, "mylock.json", &lockfile.Lock{
+					Name: "mylock", Owner: "me", Host: "h",
+					PID: 1, AcquiredAt: time.Now(),
+				})
+			},
+			wantCode: ExitOK,
+		},
+		{
+			name:     "exists/not-found",
+			cmd:      cmdExists,
+			args:     []string{"nonexistent"},
+			wantCode: ExitNotFound,
+		},
+		{
+			name:     "exists/invalid-name",
+			cmd:      cmdExists,
+			args:     []string{"bad/name"},
+			wantCode: ExitError,
+		},
+
 		// ── guard command ───────────────────────────────────────────
 		{
 			name:     "guard/success",
