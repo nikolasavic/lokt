@@ -69,6 +69,31 @@ age:      2m30s
 ttl:      1800s
 ```
 
+### Cache Checking Pattern
+
+Use `exists` to skip expensive operations when cached results exist:
+
+```bash
+# Check if tests already passed for this commit
+COMMIT=$(git rev-parse HEAD)
+if lokt exists "test-passed-$COMMIT"; then
+    echo "Tests already passed for $COMMIT, skipping..."
+    exit 0
+fi
+
+# Run expensive operation
+go test ./...
+
+# Mark as complete
+lokt lock "test-passed-$COMMIT" --ttl 3600
+```
+
+The `exists` command:
+- Returns exit code 0 if lock exists
+- Returns exit code 3 if lock not found
+- Produces no output (silent operation)
+- Perfect for cache invalidation in scripts
+
 ## Handling Stale Locks
 
 Locks can become stale when:

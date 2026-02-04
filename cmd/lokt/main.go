@@ -105,6 +105,7 @@ func usage() {
 	fmt.Println("  status [name]     Show lock status")
 	fmt.Println("    --json          Output in JSON format")
 	fmt.Println("    --prune-expired Remove expired locks while listing")
+	fmt.Println("  exists <name>     Check if lock exists (silent, exit code only)")
 	fmt.Println("  guard <name> -- <cmd...>")
 	fmt.Println("                    Run command while holding lock")
 	fmt.Println("    --ttl duration      Lock TTL (e.g., 5m, 1h)")
