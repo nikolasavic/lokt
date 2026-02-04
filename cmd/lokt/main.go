@@ -180,6 +180,28 @@ func (m *metaFlag) Set(value string) error {
 }
 
 func cmdLock(args []string) int {
+	// Reorder args: flags before positional args.
+	// Go's flag package stops at the first non-flag argument,
+	// so "lokt lock mylock --meta foo=bar" would not parse --meta.
+	var flags, pos []string
+	for i := 0; i < len(args); i++ {
+		if len(args[i]) > 0 && args[i][0] == '-' {
+			flags = append(flags, args[i])
+			// Check if this flag takes a value (--meta, --ttl, --timeout)
+			// and consume the next argument as the value
+			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+				// Special case: flags like --json don't take values
+				flagName := strings.TrimLeft(args[i], "-")
+				if flagName == "meta" || flagName == "ttl" || flagName == "timeout" {
+					i++
+					flags = append(flags, args[i])
+				}
+			}
+		} else {
+			pos = append(pos, args[i])
+		}
+	}
+
 	fs := flag.NewFlagSet("lock", flag.ExitOnError)
 	ttl := fs.Duration("ttl", 0, "Lock TTL (e.g., 5m, 1h)")
 	wait := fs.Bool("wait", false, "Wait for lock to be free")
@@ -187,7 +209,7 @@ func cmdLock(args []string) int {
 	jsonOutput := fs.Bool("json", false, "Output JSON on acquire or deny")
 	var meta metaFlag
 	fs.Var(&meta, "meta", "Metadata key=value (repeatable)")
-	_ = fs.Parse(args)
+	_ = fs.Parse(append(flags, pos...))
 
 	if fs.NArg() < 1 {
 		fmt.Fprintln(os.Stderr, "usage: lokt lock [--ttl duration] [--wait] [--timeout duration] [--meta key=value]... [--json] <name>")
