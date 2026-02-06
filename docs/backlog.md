@@ -21,6 +21,7 @@
 | L-202  | `lokt doctor` health check               | done | Pre-flight validation: dir writable, no NFS, no clock skew. One command to verify setup. beads:lokt-8s7 |
 | L-203  | Handle corrupted lock files gracefully   | done | Malformed JSON treated as stale, not crash. Defensive parsing with clear logging. beads:lokt-afw |
 | L-204  | Warn/refuse on network filesystems       | done    | Detect NFS/CIFS, warn loudly. Atomic exclusive create not guaranteed on network FS. |
+| L-205  | Opportunistic stale lock sweep           | done | Sweep all expired/dead locks on every invocation. Lazy GC, no daemon. beads:lokt-nmd |
 
 ---
 
