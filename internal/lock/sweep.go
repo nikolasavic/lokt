@@ -18,9 +18,12 @@ import (
 const EnvLoktNoSweep = "LOKT_NO_SWEEP"
 
 // PruneAllExpired scans the locks/ and freezes/ directories and removes any
-// lock that is definitively stale: expired TTL, dead PID on the same host,
-// or corrupted. This is a best-effort operation — individual errors are
-// collected but never block the caller.
+// lock that is definitively stale: expired TTL with dead PID on the same host,
+// expired TTL on a cross-host lock (PID cannot be verified), or corrupted.
+// Dead PID alone does NOT trigger pruning — the lock/unlock scripting pattern
+// intentionally outlives the acquiring process.
+// This is a best-effort operation — individual errors are collected but never
+// block the caller.
 func PruneAllExpired(rootDir string, auditor *audit.Writer) (int, []error) {
 	var total int
 	var errs []error
@@ -83,6 +86,11 @@ func sweepDir(dir, rootDir string, auditor *audit.Writer) (int, []error) {
 
 // checkStale reads a lock file and returns the stale reason (or "" if not stale).
 // Returns the lock for audit event emission; nil if the file was corrupted.
+//
+// The sweep is conservative: it requires BOTH expired TTL AND dead PID before
+// removing a same-host lock. Dead PID alone is not sufficient because the
+// lock/unlock scripting pattern intentionally outlives the acquiring process.
+// Cross-host expired locks are pruned since PID cannot be verified remotely.
 func checkStale(path string) (string, *lockfile.Lock) {
 	lf, err := lockfile.Read(path)
 	if err != nil {
@@ -93,11 +101,31 @@ func checkStale(path string) (string, *lockfile.Lock) {
 		return "", nil
 	}
 
-	result := stale.Check(lf)
-	if result.Stale {
-		return string(result.Reason), lf
+	// Require expired TTL as minimum condition for sweep.
+	if !lf.IsExpired() {
+		return "", nil
 	}
-	return "", nil
+
+	// Expired. On same host, also require dead PID.
+	hostname, _ := os.Hostname()
+	if hostname != "" && hostname == lf.Host {
+		if stale.IsProcessAlive(lf.PID) {
+			// PID exists — check for recycling via start time.
+			if lf.PIDStartNS != 0 {
+				if start, err := stale.GetProcessStartTime(lf.PID); err == nil && start == lf.PIDStartNS {
+					return "", nil // Same process, still alive
+				}
+				// Different start time → PID recycled, original holder dead
+			} else {
+				return "", nil // Can't verify recycling, conservatively skip
+			}
+		}
+		// Dead or recycled PID + expired TTL → prune
+		return "expired+dead_pid", lf
+	}
+
+	// Cross-host: can't verify PID; expired TTL alone justifies prune.
+	return string(stale.ReasonExpired), lf
 }
 
 // emitSweepEvent emits an auto-prune audit event for a swept lock.

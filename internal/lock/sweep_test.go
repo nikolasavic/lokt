@@ -124,7 +124,7 @@ func TestSweep_ExpiredTTL(t *testing.T) {
 	}
 }
 
-func TestSweep_DeadPID_SameHost(t *testing.T) {
+func TestSweep_DeadPID_SameHost_NoTTL_Untouched(t *testing.T) {
 	rootDir := setupSweepRoot(t)
 	locksDir := filepath.Join(rootDir, "locks")
 
@@ -139,11 +139,85 @@ func TestSweep_DeadPID_SameHost(t *testing.T) {
 	})
 
 	pruned, errs := PruneAllExpired(rootDir, nil)
+	if pruned != 0 {
+		t.Errorf("pruned = %d, want 0 (dead PID alone should not trigger sweep)", pruned)
+	}
+	if len(errs) != 0 {
+		t.Errorf("errs = %v, want none", errs)
+	}
+
+	// Lock should still exist
+	if _, err := os.Stat(filepath.Join(locksDir, "dead-pid.json")); err != nil {
+		t.Error("dead-PID lock without expired TTL should not be removed")
+	}
+}
+
+func TestSweep_ExpiredTTL_DeadPID_SameHost(t *testing.T) {
+	rootDir := setupSweepRoot(t)
+	locksDir := filepath.Join(rootDir, "locks")
+
+	hostname, _ := os.Hostname()
+	expired := time.Now().Add(-2 * time.Minute)
+	writeLock(t, locksDir, "both-stale", &lockfile.Lock{
+		Version:    1,
+		Name:       "both-stale",
+		Owner:      "departed",
+		Host:       hostname,
+		PID:        999999, // almost certainly not running
+		AcquiredAt: expired,
+		TTLSec:     60,
+		ExpiresAt:  &expired,
+	})
+
+	auditor := audit.NewWriter(rootDir)
+	pruned, errs := PruneAllExpired(rootDir, auditor)
 	if pruned != 1 {
 		t.Errorf("pruned = %d, want 1", pruned)
 	}
 	if len(errs) != 0 {
 		t.Errorf("errs = %v, want none", errs)
+	}
+
+	if _, err := os.Stat(filepath.Join(locksDir, "both-stale.json")); !os.IsNotExist(err) {
+		t.Error("expired + dead PID lock should be removed")
+	}
+
+	events := readSweepAuditEvents(t, rootDir)
+	if len(events) != 1 {
+		t.Fatalf("audit events = %d, want 1", len(events))
+	}
+	if events[0].Extra["sweep_reason"] != "expired+dead_pid" {
+		t.Errorf("sweep_reason = %v, want 'expired+dead_pid'", events[0].Extra["sweep_reason"])
+	}
+}
+
+func TestSweep_ExpiredTTL_LivePID_SameHost_Untouched(t *testing.T) {
+	rootDir := setupSweepRoot(t)
+	locksDir := filepath.Join(rootDir, "locks")
+
+	hostname, _ := os.Hostname()
+	expired := time.Now().Add(-2 * time.Minute)
+	writeLock(t, locksDir, "expired-alive", &lockfile.Lock{
+		Version:    1,
+		Name:       "expired-alive",
+		Owner:      "me",
+		Host:       hostname,
+		PID:        os.Getpid(), // this process is alive
+		AcquiredAt: expired,
+		TTLSec:     60,
+		ExpiresAt:  &expired,
+	})
+
+	pruned, errs := PruneAllExpired(rootDir, nil)
+	if pruned != 0 {
+		t.Errorf("pruned = %d, want 0 (expired but alive PID should not be swept)", pruned)
+	}
+	if len(errs) != 0 {
+		t.Errorf("errs = %v, want none", errs)
+	}
+
+	if _, err := os.Stat(filepath.Join(locksDir, "expired-alive.json")); err != nil {
+		t.Error("expired lock with alive PID should not be removed")
 	}
 }
 
@@ -297,7 +371,7 @@ func TestSweep_MixedDirectory(t *testing.T) {
 		ExpiresAt:  &expired,
 	})
 
-	// Stale: dead PID
+	// Dead PID but no TTL — should NOT be swept
 	writeLock(t, locksDir, "dead", &lockfile.Lock{
 		Version:    1,
 		Name:       "dead",
@@ -328,22 +402,20 @@ func TestSweep_MixedDirectory(t *testing.T) {
 	})
 
 	pruned, errs := PruneAllExpired(rootDir, nil)
-	if pruned != 2 {
-		t.Errorf("pruned = %d, want 2", pruned)
+	if pruned != 1 {
+		t.Errorf("pruned = %d, want 1 (only expired cross-host lock)", pruned)
 	}
 	if len(errs) != 0 {
 		t.Errorf("errs = %v, want none", errs)
 	}
 
-	// Stale locks gone
-	for _, name := range []string{"expired", "dead"} {
-		if _, err := os.Stat(filepath.Join(locksDir, name+".json")); !os.IsNotExist(err) {
-			t.Errorf("lock %q should have been removed", name)
-		}
+	// Only expired lock should be gone
+	if _, err := os.Stat(filepath.Join(locksDir, "expired.json")); !os.IsNotExist(err) {
+		t.Error("expired lock should have been removed")
 	}
 
-	// Healthy locks remain
-	for _, name := range []string{"healthy", "remote"} {
+	// Dead PID (no TTL), healthy, and remote should all remain
+	for _, name := range []string{"dead", "healthy", "remote"} {
 		if _, err := os.Stat(filepath.Join(locksDir, name+".json")); err != nil {
 			t.Errorf("lock %q should still exist", name)
 		}
