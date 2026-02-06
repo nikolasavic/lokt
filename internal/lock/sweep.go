@@ -14,6 +14,9 @@ import (
 	"github.com/nikolasavic/lokt/internal/stale"
 )
 
+// EnvLoktNoSweep is the environment variable that disables opportunistic sweep.
+const EnvLoktNoSweep = "LOKT_NO_SWEEP"
+
 // PruneAllExpired scans the locks/ and freezes/ directories and removes any
 // lock that is definitively stale: expired TTL, dead PID on the same host,
 // or corrupted. This is a best-effort operation — individual errors are

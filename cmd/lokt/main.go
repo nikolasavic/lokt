@@ -50,6 +50,12 @@ func main() {
 	cmd := os.Args[1]
 	args := os.Args[2:]
 
+	// Opportunistic sweep: remove definitively stale locks before command runs.
+	// Skipped for commands that don't touch locks (version, help, audit, doctor, demo).
+	if sweepEnabled(cmd) {
+		runSweep()
+	}
+
 	var code int
 	switch cmd {
 	case "version":
@@ -137,6 +143,29 @@ func usage() {
 	fmt.Println("  2  Lock held by another owner")
 	fmt.Println("  3  Lock not found")
 	fmt.Println("  4  Not lock owner")
+}
+
+// sweepEnabled returns true if the command should trigger an opportunistic sweep.
+func sweepEnabled(cmd string) bool {
+	if os.Getenv(lock.EnvLoktNoSweep) != "" {
+		return false
+	}
+	switch cmd {
+	case "lock", "unlock", "status", "guard", "freeze", "unfreeze", "why", "exists", "get-meta":
+		return true
+	}
+	return false
+}
+
+// runSweep performs a best-effort opportunistic sweep of stale locks.
+// Errors are silently ignored — sweep must never block the actual command.
+func runSweep() {
+	rootDir, err := root.Find()
+	if err != nil {
+		return
+	}
+	auditor := audit.NewWriter(rootDir)
+	lock.PruneAllExpired(rootDir, auditor)
 }
 
 // warnNetworkFS prints a warning to stderr if rootDir is on a network filesystem.
