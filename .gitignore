@@ -26,5 +26,11 @@ Thumbs.db
 .lokt/
 .loctree/
 
+# Planning & product docs (keep local only)
+_notes/
+docs/backlog.md
+docs/golive.md
+docs/story-drafts/
+
 # Generated
 lokt-hexwall-demo.sh
