@@ -41,6 +41,13 @@ func Overall(results []CheckResult) Status {
 	return StatusOK
 }
 
+// File operation hooks, swappable in tests for fault injection.
+var (
+	writeStringFn = func(f *os.File, s string) error { _, err := f.WriteString(s); return err }
+	syncFileFn    = func(f *os.File) error { return f.Sync() }
+	removeFileFn  = os.Remove
+)
+
 // CheckWritable verifies the directory is writable by creating a test file.
 // If the directory doesn't exist, it attempts to create it first.
 func CheckWritable(dir string) CheckResult {
@@ -71,19 +78,18 @@ func CheckWritable(dir string) CheckResult {
 	}
 
 	// Write test data
-	_, err = f.WriteString("lokt doctor test")
-	if err != nil {
+	if err = writeStringFn(f, "lokt doctor test"); err != nil {
 		_ = f.Close()
-		_ = os.Remove(testFile)
+		_ = removeFileFn(testFile)
 		result.Status = StatusFail
 		result.Message = fmt.Sprintf("cannot write to test file: %v", err)
 		return result
 	}
 
 	// Sync to disk
-	if err := f.Sync(); err != nil {
+	if err := syncFileFn(f); err != nil {
 		_ = f.Close()
-		_ = os.Remove(testFile)
+		_ = removeFileFn(testFile)
 		result.Status = StatusFail
 		result.Message = fmt.Sprintf("cannot sync test file: %v", err)
 		return result
@@ -92,7 +98,7 @@ func CheckWritable(dir string) CheckResult {
 	_ = f.Close()
 
 	// Remove test file
-	if err := os.Remove(testFile); err != nil {
+	if err := removeFileFn(testFile); err != nil {
 		result.Status = StatusFail
 		result.Message = fmt.Sprintf("cannot remove test file: %v", err)
 		return result
@@ -105,8 +111,11 @@ func CheckWritable(dir string) CheckResult {
 // CheckClock verifies the system clock is within a reasonable range.
 // Warns if year < 2020 (lokt didn't exist) or > 2100 (likely misconfigured).
 func CheckClock() CheckResult {
+	return checkClockYear(time.Now().Year())
+}
+
+func checkClockYear(year int) CheckResult {
 	result := CheckResult{Name: "clock"}
-	year := time.Now().Year()
 
 	if year < 2020 {
 		result.Status = StatusWarn

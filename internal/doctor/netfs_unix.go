@@ -38,8 +38,10 @@ func GetFSTypeName(path string) string {
 	if err := syscall.Statfs(path, &stat); err != nil {
 		return "unknown"
 	}
+	return fsTypeToName(int64(stat.Type))
+}
 
-	fsType := stat.Type
+func fsTypeToName(fsType int64) string {
 	switch fsType {
 	case 0x6969:
 		return "nfs"
