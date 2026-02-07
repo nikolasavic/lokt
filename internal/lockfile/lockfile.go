@@ -26,6 +26,7 @@ type Lock struct {
 	Host       string            `json:"host"`
 	PID        int               `json:"pid"`
 	PIDStartNS int64             `json:"pid_start_ns,omitempty"`
+	AgentID    string            `json:"agent_id,omitempty"`
 	AcquiredAt time.Time         `json:"acquired_ts"`
 	TTLSec     int               `json:"ttl_sec,omitempty"`
 	ExpiresAt  *time.Time        `json:"expires_at,omitempty"`

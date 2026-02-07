@@ -35,6 +35,10 @@ func (e *FrozenError) Error() string {
 	if IsFreezeLock(displayName) {
 		displayName = displayName[len(FreezePrefix):]
 	}
+	if e.Lock.AgentID != "" {
+		return fmt.Sprintf("operation %q frozen by %s (agent: %s)@%s for %s%s",
+			displayName, e.Lock.Owner, e.Lock.AgentID, e.Lock.Host, age, remaining)
+	}
 	return fmt.Sprintf("operation %q frozen by %s@%s for %s%s",
 		displayName, e.Lock.Owner, e.Lock.Host, age, remaining)
 }
@@ -78,6 +82,7 @@ func Freeze(rootDir, name string, opts FreezeOptions) error {
 		Owner:      id.Owner,
 		Host:       id.Host,
 		PID:        id.PID,
+		AgentID:    id.AgentID,
 		AcquiredAt: now,
 		TTLSec:     ttlSec,
 		ExpiresAt:  &exp,
@@ -282,13 +287,14 @@ func emitFreezeEvent(w *audit.Writer, id identity.Identity, name string, ttlSec 
 		return
 	}
 	w.Emit(&audit.Event{
-		Event:  audit.EventFreeze,
-		Name:   name,
-		LockID: lockID,
-		Owner:  id.Owner,
-		Host:   id.Host,
-		PID:    id.PID,
-		TTLSec: ttlSec,
+		Event:   audit.EventFreeze,
+		Name:    name,
+		LockID:  lockID,
+		Owner:   id.Owner,
+		Host:    id.Host,
+		PID:     id.PID,
+		AgentID: id.AgentID,
+		TTLSec:  ttlSec,
 	})
 }
 
@@ -307,13 +313,14 @@ func emitUnfreezeEvent(w *audit.Writer, lock *lockfile.Lock, force bool, lockID 
 		name = name[len(FreezePrefix):]
 	}
 	w.Emit(&audit.Event{
-		Event:  eventType,
-		Name:   name,
-		LockID: lockID,
-		Owner:  id.Owner,
-		Host:   id.Host,
-		PID:    id.PID,
-		TTLSec: lock.TTLSec,
+		Event:   eventType,
+		Name:    name,
+		LockID:  lockID,
+		Owner:   id.Owner,
+		Host:    id.Host,
+		PID:     id.PID,
+		AgentID: id.AgentID,
+		TTLSec:  lock.TTLSec,
 	})
 }
 
@@ -323,12 +330,13 @@ func emitFreezeDenyEvent(w *audit.Writer, name string, freeze *lockfile.Lock, lo
 	}
 	id := identity.Current()
 	w.Emit(&audit.Event{
-		Event:  audit.EventFreezeDeny,
-		Name:   name,
-		LockID: lockID,
-		Owner:  id.Owner,
-		Host:   id.Host,
-		PID:    id.PID,
+		Event:   audit.EventFreezeDeny,
+		Name:    name,
+		LockID:  lockID,
+		Owner:   id.Owner,
+		Host:    id.Host,
+		PID:     id.PID,
+		AgentID: id.AgentID,
 		Extra: map[string]any{
 			"freeze_owner": freeze.Owner,
 			"freeze_host":  freeze.Host,

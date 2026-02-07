@@ -350,6 +350,7 @@ type lockDenyOutput struct {
 	HolderOwner      string `json:"holder_owner,omitempty"`
 	HolderHost       string `json:"holder_host,omitempty"`
 	HolderPID        int    `json:"holder_pid,omitempty"`
+	HolderAgentID    string `json:"holder_agent_id,omitempty"`
 	HolderAgeSec     int    `json:"holder_age_sec,omitempty"`
 	HolderTTLSec     int    `json:"holder_ttl_sec,omitempty"`
 	HolderRemainSec  int    `json:"holder_remaining_sec,omitempty"`
@@ -375,6 +376,7 @@ func printLockDenyJSONFromLock(lk *lockfile.Lock) {
 		out.HolderOwner = lk.Owner
 		out.HolderHost = lk.Host
 		out.HolderPID = lk.PID
+		out.HolderAgentID = lk.AgentID
 		out.HolderAcquiredTS = lk.AcquiredAt.Format(time.RFC3339)
 		out.HolderAgeSec = int(time.Since(lk.AcquiredAt).Seconds())
 		out.HolderExpired = lk.IsExpired()
@@ -407,6 +409,7 @@ func printLockDenyJSON(name string, lf *lockFile) {
 		HolderOwner:      lf.Owner,
 		HolderHost:       lf.Host,
 		HolderPID:        lf.PID,
+		HolderAgentID:    lf.AgentID,
 		HolderAcquiredTS: lf.AcquiredAt.Format(time.RFC3339),
 		HolderAgeSec:     int(time.Since(lf.AcquiredAt).Seconds()),
 		HolderExpired:    lf.IsExpired(),
@@ -976,6 +979,9 @@ func showLock(rootDir, name string, jsonOutput bool) int {
 	age := time.Since(lf.AcquiredAt).Truncate(time.Second)
 	fmt.Printf("name:     %s\n", lf.Name)
 	fmt.Printf("owner:    %s\n", lf.Owner)
+	if lf.AgentID != "" {
+		fmt.Printf("agent:    %s\n", lf.AgentID)
+	}
 	fmt.Printf("host:     %s\n", lf.Host)
 	fmt.Printf("pid:      %d (%s)\n", lf.PID, pidLiveness(lf))
 	fmt.Printf("age:      %s\n", age)
@@ -1092,6 +1098,7 @@ type lockFile struct {
 	Host       string            `json:"host"`
 	PID        int               `json:"pid"`
 	PIDStartNS int64             `json:"pid_start_ns,omitempty"`
+	AgentID    string            `json:"agent_id,omitempty"`
 	AcquiredAt time.Time         `json:"acquired_ts"`
 	TTLSec     int               `json:"ttl_sec,omitempty"`
 	ExpiresAt  *time.Time        `json:"expires_at,omitempty"`
@@ -1106,6 +1113,7 @@ type statusOutput struct {
 	Host       string            `json:"host"`
 	PID        int               `json:"pid"`
 	PIDStartNS int64             `json:"pid_start_ns,omitempty"`
+	AgentID    string            `json:"agent_id,omitempty"`
 	AcquiredAt string            `json:"acquired_ts"`
 	TTLSec     int               `json:"ttl_sec,omitempty"`
 	ExpiresAt  string            `json:"expires_at,omitempty"`
@@ -1124,6 +1132,7 @@ func lockToStatusOutput(lf *lockFile, isFreeze bool) statusOutput {
 		Host:       lf.Host,
 		PID:        lf.PID,
 		PIDStartNS: lf.PIDStartNS,
+		AgentID:    lf.AgentID,
 		AcquiredAt: lf.AcquiredAt.Format(time.RFC3339),
 		TTLSec:     lf.TTLSec,
 		AgeSec:     int(time.Since(lf.AcquiredAt).Seconds()),
@@ -1536,6 +1545,7 @@ type whyReason struct {
 	FreezeOwner        string `json:"freeze_owner,omitempty"`
 	FreezeHost         string `json:"freeze_host,omitempty"`
 	FreezePID          int    `json:"freeze_pid,omitempty"`
+	FreezeAgentID      string `json:"freeze_agent_id,omitempty"`
 	FreezeAgeSec       int    `json:"freeze_age_sec,omitempty"`
 	FreezeRemainingSec int    `json:"freeze_remaining_sec,omitempty"`
 
@@ -1543,6 +1553,7 @@ type whyReason struct {
 	HolderOwner       string `json:"holder_owner,omitempty"`
 	HolderHost        string `json:"holder_host,omitempty"`
 	HolderPID         int    `json:"holder_pid,omitempty"`
+	HolderAgentID     string `json:"holder_agent_id,omitempty"`
 	HolderAgeSec      int    `json:"holder_age_sec,omitempty"`
 	HolderTTLSec      int    `json:"holder_ttl_sec,omitempty"`
 	HolderRemainSec   int    `json:"holder_remaining_sec,omitempty"`
@@ -1602,6 +1613,7 @@ func cmdWhy(args []string) int {
 			FreezeOwner:        freezeLock.Owner,
 			FreezeHost:         freezeLock.Host,
 			FreezePID:          freezeLock.PID,
+			FreezeAgentID:      freezeLock.AgentID,
 			FreezeAgeSec:       int(age.Seconds()),
 			FreezeRemainingSec: int(remaining.Seconds()),
 		})
@@ -1669,6 +1681,7 @@ func cmdWhy(args []string) int {
 				HolderOwner:     lf.Owner,
 				HolderHost:      lf.Host,
 				HolderPID:       lf.PID,
+				HolderAgentID:   lf.AgentID,
 				HolderAgeSec:    int(age.Seconds()),
 				HolderTTLSec:    lf.TTLSec,
 				HolderPIDStatus: pidStatus,
@@ -1682,6 +1695,7 @@ func cmdWhy(args []string) int {
 				HolderOwner:     lf.Owner,
 				HolderHost:      lf.Host,
 				HolderPID:       lf.PID,
+				HolderAgentID:   lf.AgentID,
 				HolderAgeSec:    int(age.Seconds()),
 				HolderTTLSec:    lf.TTLSec,
 				HolderExpired:   lf.IsExpired(),
@@ -1771,12 +1785,20 @@ func whyPrintText(name string, reasons []whyReason, suggestions []string) {
 		fmt.Println()
 		switch r.Type {
 		case "frozen":
-			fmt.Printf("  FROZEN by %s@%s\n", r.FreezeOwner, r.FreezeHost)
+			if r.FreezeAgentID != "" {
+				fmt.Printf("  FROZEN by %s (agent: %s)@%s\n", r.FreezeOwner, r.FreezeAgentID, r.FreezeHost)
+			} else {
+				fmt.Printf("  FROZEN by %s@%s\n", r.FreezeOwner, r.FreezeHost)
+			}
 			fmt.Printf("    Age:       %s\n", time.Duration(r.FreezeAgeSec)*time.Second)
 			fmt.Printf("    Remaining: %s\n", time.Duration(r.FreezeRemainingSec)*time.Second)
 		case "self_held":
 			fmt.Printf("  SELF-HELD (you already hold this lock)\n")
-			fmt.Printf("    Owner: %s@%s (PID %d)\n", r.HolderOwner, r.HolderHost, r.HolderPID)
+			if r.HolderAgentID != "" {
+				fmt.Printf("    Owner: %s (agent: %s)@%s (PID %d)\n", r.HolderOwner, r.HolderAgentID, r.HolderHost, r.HolderPID)
+			} else {
+				fmt.Printf("    Owner: %s@%s (PID %d)\n", r.HolderOwner, r.HolderHost, r.HolderPID)
+			}
 			fmt.Printf("    Age:   %s\n", time.Duration(r.HolderAgeSec)*time.Second)
 		case "corrupted":
 			fmt.Printf("  CORRUPTED lock file\n")
@@ -1789,7 +1811,11 @@ func whyPrintText(name string, reasons []whyReason, suggestions []string) {
 			case "dead_pid":
 				label = "STALE (dead PID)"
 			}
-			fmt.Printf("  %s by %s@%s (PID %d, %s)\n", label, r.HolderOwner, r.HolderHost, r.HolderPID, r.HolderPIDStatus)
+			if r.HolderAgentID != "" {
+				fmt.Printf("  %s by %s (agent: %s)@%s (PID %d, %s)\n", label, r.HolderOwner, r.HolderAgentID, r.HolderHost, r.HolderPID, r.HolderPIDStatus)
+			} else {
+				fmt.Printf("  %s by %s@%s (PID %d, %s)\n", label, r.HolderOwner, r.HolderHost, r.HolderPID, r.HolderPIDStatus)
+			}
 			fmt.Printf("    Age: %s\n", time.Duration(r.HolderAgeSec)*time.Second)
 			if r.HolderTTLSec > 0 {
 				ttl := time.Duration(r.HolderTTLSec) * time.Second

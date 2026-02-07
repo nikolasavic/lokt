@@ -28,6 +28,10 @@ type HeldError struct {
 
 func (e *HeldError) Error() string {
 	age := time.Since(e.Lock.AcquiredAt).Truncate(time.Second)
+	if e.Lock.AgentID != "" {
+		return fmt.Sprintf("lock %q held by %s (agent: %s)@%s (pid %d) for %s",
+			e.Lock.Name, e.Lock.Owner, e.Lock.AgentID, e.Lock.Host, e.Lock.PID, age)
+	}
 	return fmt.Sprintf("lock %q held by %s@%s (pid %d) for %s",
 		e.Lock.Name, e.Lock.Owner, e.Lock.Host, e.Lock.PID, age)
 }
@@ -64,6 +68,7 @@ func Acquire(rootDir, name string, opts AcquireOptions) error {
 		Owner:      id.Owner,
 		Host:       id.Host,
 		PID:        id.PID,
+		AgentID:    id.AgentID,
 		AcquiredAt: time.Now(),
 	}
 	if startNS, err := stale.GetProcessStartTime(id.PID); err == nil {
@@ -281,13 +286,14 @@ func emitAcquireEvent(w *audit.Writer, id identity.Identity, name string, ttlSec
 		return
 	}
 	w.Emit(&audit.Event{
-		Event:  audit.EventAcquire,
-		Name:   name,
-		LockID: lockID,
-		Owner:  id.Owner,
-		Host:   id.Host,
-		PID:    id.PID,
-		TTLSec: ttlSec,
+		Event:   audit.EventAcquire,
+		Name:    name,
+		LockID:  lockID,
+		Owner:   id.Owner,
+		Host:    id.Host,
+		PID:     id.PID,
+		AgentID: id.AgentID,
+		TTLSec:  ttlSec,
 	})
 }
 
@@ -302,13 +308,14 @@ func emitDenyEvent(w *audit.Writer, id identity.Identity, name string, ttlSec in
 		"holder_pid":   holder.PID,
 	}
 	w.Emit(&audit.Event{
-		Event:  audit.EventDeny,
-		Name:   name,
-		Owner:  id.Owner,
-		Host:   id.Host,
-		PID:    id.PID,
-		TTLSec: ttlSec,
-		Extra:  extra,
+		Event:   audit.EventDeny,
+		Name:    name,
+		Owner:   id.Owner,
+		Host:    id.Host,
+		PID:     id.PID,
+		AgentID: id.AgentID,
+		TTLSec:  ttlSec,
+		Extra:   extra,
 	})
 }
 
@@ -319,11 +326,12 @@ func emitCorruptBreakEvent(w *audit.Writer, id identity.Identity, name string) {
 		return
 	}
 	w.Emit(&audit.Event{
-		Event: audit.EventCorruptBreak,
-		Name:  name,
-		Owner: id.Owner,
-		Host:  id.Host,
-		PID:   id.PID,
+		Event:   audit.EventCorruptBreak,
+		Name:    name,
+		Owner:   id.Owner,
+		Host:    id.Host,
+		PID:     id.PID,
+		AgentID: id.AgentID,
 	})
 }
 
@@ -339,12 +347,13 @@ func emitAutoPruneEvent(w *audit.Writer, id identity.Identity, name string, prun
 		"pruned_pid":   pruned.PID,
 	}
 	w.Emit(&audit.Event{
-		Event:  audit.EventAutoPrune,
-		Name:   name,
-		LockID: pruned.LockID,
-		Owner:  id.Owner,
-		Host:   id.Host,
-		PID:    id.PID,
-		Extra:  extra,
+		Event:   audit.EventAutoPrune,
+		Name:    name,
+		LockID:  pruned.LockID,
+		Owner:   id.Owner,
+		Host:    id.Host,
+		PID:     id.PID,
+		AgentID: id.AgentID,
+		Extra:   extra,
 	})
 }

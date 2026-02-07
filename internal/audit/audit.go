@@ -35,6 +35,7 @@ type Event struct {
 	Owner     string         `json:"owner"`
 	Host      string         `json:"host"`
 	PID       int            `json:"pid"`
+	AgentID   string         `json:"agent_id,omitempty"`
 	TTLSec    int            `json:"ttl_sec,omitempty"`
 	Extra     map[string]any `json:"extra,omitempty"`
 }

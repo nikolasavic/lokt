@@ -209,11 +209,12 @@ func emitCorruptBreakReleaseEvent(w *audit.Writer, name string) {
 	}
 	id := identity.Current()
 	w.Emit(&audit.Event{
-		Event: audit.EventCorruptBreak,
-		Name:  name,
-		Owner: id.Owner,
-		Host:  id.Host,
-		PID:   id.PID,
+		Event:   audit.EventCorruptBreak,
+		Name:    name,
+		Owner:   id.Owner,
+		Host:    id.Host,
+		PID:     id.PID,
+		AgentID: id.AgentID,
 	})
 }
 
@@ -232,12 +233,13 @@ func emitReleaseEvent(w *audit.Writer, lock *lockfile.Lock, opts ReleaseOptions)
 
 	id := identity.Current()
 	w.Emit(&audit.Event{
-		Event:  eventType,
-		Name:   lock.Name,
-		LockID: lock.LockID,
-		Owner:  id.Owner,
-		Host:   id.Host,
-		PID:    id.PID,
-		TTLSec: lock.TTLSec,
+		Event:   eventType,
+		Name:    lock.Name,
+		LockID:  lock.LockID,
+		Owner:   id.Owner,
+		Host:    id.Host,
+		PID:     id.PID,
+		AgentID: id.AgentID,
+		TTLSec:  lock.TTLSec,
 	})
 }

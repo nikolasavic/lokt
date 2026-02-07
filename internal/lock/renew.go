@@ -59,12 +59,13 @@ func emitRenewEvent(w *audit.Writer, id identity.Identity, name string, ttlSec i
 		return
 	}
 	w.Emit(&audit.Event{
-		Event:  audit.EventRenew,
-		Name:   name,
-		LockID: lockID,
-		Owner:  id.Owner,
-		Host:   id.Host,
-		PID:    id.PID,
-		TTLSec: ttlSec,
+		Event:   audit.EventRenew,
+		Name:    name,
+		LockID:  lockID,
+		Owner:   id.Owner,
+		Host:    id.Host,
+		PID:     id.PID,
+		AgentID: id.AgentID,
+		TTLSec:  ttlSec,
 	})
 }
