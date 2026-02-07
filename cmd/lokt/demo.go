@@ -425,6 +425,10 @@ SECONDS=0
 #
 # Each worker runs as a function in a background subshell. We
 # collect PIDs so the cleanup trap can kill them on Ctrl-C.
+#
+# IMPORTANT: Each worker gets a unique LOKT_OWNER so they compete
+# for the lock rather than reentrant-acquire (same owner = refresh).
+# Without this, all workers would pass through the guard simultaneously.
 
 TOTAL=$(( ROWS * COLS ))
 
@@ -482,7 +486,7 @@ worker() {
 
 i=0
 while [ "$i" -lt "$WORKERS" ]; do
-    worker &
+    LOKT_OWNER="worker-$i" worker &
     WORKER_PIDS="$WORKER_PIDS $!"
     i=$(( i + 1 ))
 done
