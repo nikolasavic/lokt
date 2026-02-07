@@ -1,115 +1,161 @@
 # Lokt Quickstart
 
-Lokt serializes high-risk CLI operations (deploys, migrations, terraform apply) across multiple terminals and agents on the same machine.
+Lokt coordinates AI agents competing for shared resources in the same repo. Wrap any command in `lokt guard` and only one agent runs it at a time.
 
 ## Installation
 
 ```bash
-# Build from source
+# One-liner install (macOS + Linux, amd64/arm64)
+curl -fsSL https://raw.githubusercontent.com/nikolasavic/lokt/main/scripts/install.sh | sh
+
+# Or build from source
 go build -o lokt ./cmd/lokt
-
-# Install system-wide
-sudo cp lokt /usr/local/bin/
-
-# Or install to user bin
-cp lokt ~/bin/
 ```
 
-## Basic Usage
+## Wrap Your First Command
 
-### Guard a Command
-
-The most common pattern - wrap any command to ensure only one runs at a time:
+The primary interface is `guard` — acquire a lock, run a command, release on exit:
 
 ```bash
-# Only one deploy can run at a time
-lokt guard deploy -- ./scripts/deploy.sh
-
-# With a TTL (auto-expires if process hangs)
-lokt guard deploy --ttl 30m -- ./scripts/deploy.sh
+lokt guard build --ttl 5m -- make build
 ```
 
-If another process holds the lock:
-```
-error: lock "deploy" held by nikola@macbook (pid 12345) for 2m30s
-```
+This acquires the `build` lock, runs `make build`, and releases the lock when done — even if the command fails or is killed. The `--ttl 5m` sets a TTL so the lock auto-expires if the process hangs.
 
-### Manual Lock/Unlock
+With `--ttl`, a background heartbeat renews the lock at TTL/2 intervals. A 5-minute TTL doesn't mean your build is capped at 5 minutes — it means the lock stays fresh as long as the process is alive.
 
-For more control over lock lifecycle:
+## What Happens When Agents Collide
+
+When a second agent tries to acquire a lock that's already held:
 
 ```bash
-# Acquire
-lokt lock deploy --ttl 30m
+$ lokt guard build --ttl 5m -- make build
+error: lock "build" held by agent-1@macbook (pid 48201) for 12s
+```
 
-# Check status
-lokt status deploy
+Exit code 2 means "held by another." The agent gets a clear message: who holds it, their PID, and how long they've had it.
+
+### Wait instead of failing
+
+```bash
+lokt guard build --ttl 5m --wait --timeout 10m -- make build
+```
+
+The agent blocks until the lock is free (or the timeout expires), with exponential backoff and jitter to avoid thundering herd.
+
+## Agent Crashed — Now What?
+
+When an agent crashes, its lock stays on disk. Lokt handles this automatically:
+
+**Dead PID detection:** On the next acquire attempt, Lokt checks if the holder's PID is still alive. If the process is dead (same host), the stale lock is silently removed and the new agent acquires it.
+
+**TTL expiry:** If the TTL has elapsed, the lock is considered expired. Any agent can break it:
+
+```bash
+# Remove only if stale (expired TTL or dead PID)
+lokt unlock build --break-stale
+
+# Force remove regardless (break-glass, use with caution)
+lokt unlock build --force
+```
+
+**Auto-prune:** When listing locks, expired ones can be cleaned up automatically:
+
+```bash
+lokt status --prune-expired
+```
+
+## Manual Lock/Unlock
+
+For cases where `guard` doesn't fit (multi-step workflows, cross-script coordination):
+
+```bash
+# Agent acquires the lock
+lokt lock db-migrate --ttl 10m
+
+# Do work...
+./scripts/migrate.sh
 
 # Release
-lokt unlock deploy
+lokt unlock db-migrate
 ```
 
-### Check Lock Status
+Prefer `guard` when possible — it handles cleanup on exit automatically.
+
+## Freeze — Human Override
+
+Need to stop all agents from touching a resource? Freeze it:
 
 ```bash
-# List all locks
+# Block all guard commands for "deploy" for 30 minutes
+lokt freeze deploy --ttl 30m
+
+# Agents see:
+# error: lock "deploy" is frozen until 2026-02-07T15:30:00Z
+
+# Resume when ready
+lokt unfreeze deploy
+```
+
+Freezes require a TTL — a forgotten freeze can't block agents forever.
+
+## Audit — What Happened Overnight?
+
+Every lock operation is logged to an append-only JSONL file. When 5 agents ran overnight and something broke:
+
+```bash
+# What happened in the last 8 hours?
+lokt audit --since 8h
+
+# Filter by lock name
+lokt audit --name build --since 1h
+
+# Follow in real-time
+lokt audit --tail
+```
+
+Events include: acquire, deny, release, force-break, stale-break, renew, freeze, unfreeze.
+
+## Lock Status and Diagnostics
+
+```bash
+# List all held locks
 lokt status
 
 # Single lock details
-lokt status deploy
+lokt status build
+
+# Machine-readable
+lokt status --json
+
+# Explain why a lock can't be acquired
+lokt why build
+
+# Validate setup (directory, filesystem, clock)
+lokt doctor
 ```
 
-Output:
-```
-name:     deploy
-owner:    nikola
-host:     macbook
-pid:      12345 (alive)
-age:      2m30s
-ttl:      1800s
-```
+## Setting Up Agent Identity
 
-### Cache Checking Pattern
-
-Use `exists` to skip expensive operations when cached results exist:
+Each agent identifies itself in lock files. By default, Lokt uses the OS username. To distinguish agents on the same machine:
 
 ```bash
-# Check if tests already passed for this commit
-COMMIT=$(git rev-parse HEAD)
-if lokt exists "test-passed-$COMMIT"; then
-    echo "Tests already passed for $COMMIT, skipping..."
-    exit 0
-fi
-
-# Run expensive operation
-go test ./...
-
-# Mark as complete
-lokt lock "test-passed-$COMMIT" --ttl 3600
+export LOKT_OWNER="agent-1"
+lokt guard build --ttl 5m -- make build
+# Lock shows: agent-1@macbook
 ```
 
-The `exists` command:
-- Returns exit code 0 if lock exists
-- Returns exit code 3 if lock not found
-- Produces no output (silent operation)
-- Perfect for cache invalidation in scripts
+Set `LOKT_OWNER` in each agent's environment so locks and audit entries are clearly attributed.
 
-## Handling Stale Locks
+## Where Locks Are Stored
 
-Locks can become stale when:
-- The TTL expires
-- The holding process crashes (dead PID)
+Lokt discovers the lock directory in this order:
 
-```bash
-# Remove only if stale (safe)
-lokt unlock deploy --break-stale
+1. `$LOKT_ROOT` environment variable (if set)
+2. `.git/lokt/` (git common dir — shared across worktrees)
+3. `.lokt/` in the current directory
 
-# Force remove (break-glass, use with caution)
-lokt unlock deploy --force
-
-# Auto-prune expired locks while listing
-lokt status --prune-expired
-```
+All agents in the same repo share the same lock namespace automatically. Git worktrees share the same lock directory via git's common dir.
 
 ## Exit Codes
 
@@ -117,148 +163,21 @@ lokt status --prune-expired
 |------|---------|
 | 0 | Success |
 | 1 | General error |
-| 2 | Lock held by another owner |
+| 2 | Lock held by another owner (or frozen) |
 | 3 | Lock not found |
 | 4 | Not lock owner |
 
-Use exit code 2 to detect contention in scripts:
+Use exit codes for scripting:
 
 ```bash
-lokt lock deploy --ttl 30m
-if [ $? -eq 2 ]; then
-    echo "Deploy already in progress, exiting"
-    exit 1
-fi
+lokt lock build --ttl 5m
+case $? in
+    0) echo "Lock acquired, proceeding..." ;;
+    2) echo "Build already running, skipping"; exit 0 ;;
+    *) echo "Unexpected error"; exit 1 ;;
+esac
 ```
 
----
+## Next Steps
 
-## Sample Deployment Script
-
-Here's a production-ready deployment script using lokt:
-
-```bash
-#!/usr/bin/env bash
-set -euo pipefail
-
-# Configuration
-LOCK_NAME="deploy"
-LOCK_TTL="30m"
-DEPLOY_ENV="${1:-staging}"
-
-# Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-NC='\033[0m' # No Color
-
-log_info()  { echo -e "${GREEN}[INFO]${NC} $1"; }
-log_warn()  { echo -e "${YELLOW}[WARN]${NC} $1"; }
-log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
-
-# The actual deployment logic
-do_deploy() {
-    log_info "Starting deployment to ${DEPLOY_ENV}..."
-
-    # Your deployment steps here
-    # Example:
-    # 1. Pull latest code
-    log_info "Pulling latest code..."
-    git pull origin main
-
-    # 2. Build
-    log_info "Building application..."
-    # npm run build
-    # go build ./...
-
-    # 3. Run migrations
-    log_info "Running database migrations..."
-    # ./scripts/migrate.sh
-
-    # 4. Deploy
-    log_info "Deploying to ${DEPLOY_ENV}..."
-    # kubectl apply -f k8s/
-    # aws ecs update-service ...
-    # rsync -avz ./dist/ server:/var/www/
-
-    # 5. Health check
-    log_info "Running health checks..."
-    # curl -f https://myapp.com/health || exit 1
-
-    log_info "Deployment complete!"
-}
-
-# Main entry point - wrapped with lokt guard
-main() {
-    log_info "Acquiring deploy lock (TTL: ${LOCK_TTL})..."
-
-    # lokt guard handles:
-    # - Acquiring the lock (fails fast if held)
-    # - Running the command
-    # - Releasing the lock on exit (success, failure, or signal)
-    lokt guard "${LOCK_NAME}" --ttl "${LOCK_TTL}" -- bash -c "$(declare -f log_info log_warn log_error do_deploy); do_deploy"
-}
-
-main "$@"
-```
-
-### Simpler Version
-
-If you prefer minimal wrapper:
-
-```bash
-#!/usr/bin/env bash
-set -euo pipefail
-
-# Wrap entire deploy in lokt guard
-exec lokt guard deploy --ttl 30m -- bash -c '
-    set -euo pipefail
-
-    echo "Deploying..."
-    git pull origin main
-    npm run build
-    npm run deploy
-
-    echo "Done!"
-'
-```
-
-### CI/CD Integration
-
-For CI systems where multiple jobs might deploy:
-
-```bash
-#!/usr/bin/env bash
-# .github/scripts/deploy.sh
-
-# Try to acquire lock, exit gracefully if another deploy is running
-if ! lokt lock deploy --ttl 30m; then
-    echo "Another deployment is in progress, skipping..."
-    exit 0  # Exit success so CI doesn't fail
-fi
-
-# Ensure we release the lock on exit
-trap 'lokt unlock deploy' EXIT
-
-# Your deployment logic
-./scripts/do-deploy.sh
-```
-
----
-
-## Where Locks Are Stored
-
-Lokt stores locks in this priority order:
-
-1. `$LOKT_ROOT` environment variable (if set)
-2. `.git/lokt/locks/` (git common dir - shared across worktrees)
-3. `.lokt/locks/` in current directory
-
-This means all terminals/agents in the same repo share the same locks automatically.
-
-## Tips
-
-- **Always use TTL** for long-running operations to prevent permanent locks from crashes
-- **Use descriptive lock names**: `deploy-prod`, `migrate-db`, `terraform-apply`
-- **Check status first** if unsure: `lokt status`
-- **Use `--break-stale`** instead of `--force` when possible - it's safer
+- [docs/patterns.md](patterns.md) — multi-agent workflow patterns (test sharding, script wrappers, resource pools)
