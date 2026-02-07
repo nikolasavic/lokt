@@ -20,7 +20,6 @@ import (
 	"github.com/nikolasavic/lokt/internal/identity"
 	"github.com/nikolasavic/lokt/internal/lock"
 	"github.com/nikolasavic/lokt/internal/lockfile"
-	"github.com/nikolasavic/lokt/internal/netfs"
 	"github.com/nikolasavic/lokt/internal/root"
 	"github.com/nikolasavic/lokt/internal/stale"
 )
@@ -68,8 +67,6 @@ func main() {
 		code = cmdStatus(args)
 	case "exists":
 		code = cmdExists(args)
-	case "get-meta":
-		code = cmdGetMeta(args)
 	case "guard":
 		code = cmdGuard(args)
 	case "freeze":
@@ -104,7 +101,6 @@ func usage() {
 	fmt.Println("    --ttl duration      Lock TTL (e.g., 5m, 1h)")
 	fmt.Println("    --wait              Wait for lock to be free")
 	fmt.Println("    --timeout duration  Maximum wait time (requires --wait)")
-	fmt.Println("    --meta key=value    Store metadata (repeatable)")
 	fmt.Println("    --json              Output JSON on acquire or deny")
 	fmt.Println("  unlock <name>     Release a lock")
 	fmt.Println("    --force         Remove without ownership check (break-glass)")
@@ -116,8 +112,6 @@ func usage() {
 	fmt.Println("    --json          Output in JSON format")
 	fmt.Println("    --prune-expired Remove expired locks while listing")
 	fmt.Println("  exists <name>     Check if lock exists (silent, exit code only)")
-	fmt.Println("  get-meta <name> <key>")
-	fmt.Println("                    Extract single metadata value from lock")
 	fmt.Println("  guard <name> -- <cmd...>")
 	fmt.Println("                    Run command while holding lock")
 	fmt.Println("    --ttl duration      Lock TTL (e.g., 5m, 1h)")
@@ -151,7 +145,7 @@ func sweepEnabled(cmd string) bool {
 		return false
 	}
 	switch cmd {
-	case "lock", "unlock", "status", "guard", "freeze", "unfreeze", "why", "exists", "get-meta":
+	case "lock", "unlock", "status", "guard", "freeze", "unfreeze", "why", "exists":
 		return true
 	}
 	return false
@@ -168,60 +162,20 @@ func runSweep() {
 	lock.PruneAllExpired(rootDir, auditor)
 }
 
-// warnNetworkFS prints a warning to stderr if rootDir is on a network filesystem.
-// Set LOKT_ALLOW_NETFS=1 to suppress the warning.
-func warnNetworkFS(rootDir string) {
-	if os.Getenv("LOKT_ALLOW_NETFS") != "" {
-		return
-	}
-	if network, fsName := netfs.Check(rootDir); network {
-		fmt.Fprintf(os.Stderr, "warning: lock root is on a %s filesystem; atomic O_EXCL may not be reliable\n", fsName)
-		fmt.Fprintln(os.Stderr, "  Set LOKT_ALLOW_NETFS=1 to suppress this warning")
-	}
-}
-
-// metaFlag collects repeatable --meta key=value flags into a map.
-// Last value wins for duplicate keys.
-type metaFlag struct {
-	data map[string]string
-}
-
-func (m *metaFlag) String() string {
-	return fmt.Sprintf("%v", m.data)
-}
-
-func (m *metaFlag) Set(value string) error {
-	if m.data == nil {
-		m.data = make(map[string]string)
-	}
-	// Split on first '=' only (value may contain '=')
-	idx := strings.Index(value, "=")
-	if idx < 0 {
-		return fmt.Errorf("invalid format: expected key=value, got %q", value)
-	}
-	key := value[:idx]
-	val := value[idx+1:]
-	if key == "" {
-		return fmt.Errorf("invalid format: key cannot be empty")
-	}
-	m.data[key] = val
-	return nil
-}
-
 func cmdLock(args []string) int {
 	// Reorder args: flags before positional args.
 	// Go's flag package stops at the first non-flag argument,
-	// so "lokt lock mylock --meta foo=bar" would not parse --meta.
+	// so "lokt lock mylock --ttl 5m" would not parse --ttl.
 	var flags, pos []string
 	for i := 0; i < len(args); i++ {
 		if len(args[i]) > 0 && args[i][0] == '-' {
 			flags = append(flags, args[i])
-			// Check if this flag takes a value (--meta, --ttl, --timeout)
+			// Check if this flag takes a value (--ttl, --timeout)
 			// and consume the next argument as the value
 			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
 				// Special case: flags like --json don't take values
 				flagName := strings.TrimLeft(args[i], "-")
-				if flagName == "meta" || flagName == "ttl" || flagName == "timeout" {
+				if flagName == "ttl" || flagName == "timeout" {
 					i++
 					flags = append(flags, args[i])
 				}
@@ -236,12 +190,10 @@ func cmdLock(args []string) int {
 	wait := fs.Bool("wait", false, "Wait for lock to be free")
 	timeout := fs.Duration("timeout", 0, "Maximum time to wait (requires --wait)")
 	jsonOutput := fs.Bool("json", false, "Output JSON on acquire or deny")
-	var meta metaFlag
-	fs.Var(&meta, "meta", "Metadata key=value (repeatable)")
 	_ = fs.Parse(append(flags, pos...))
 
 	if fs.NArg() < 1 {
-		fmt.Fprintln(os.Stderr, "usage: lokt lock [--ttl duration] [--wait] [--timeout duration] [--meta key=value]... [--json] <name>")
+		fmt.Fprintln(os.Stderr, "usage: lokt lock [--ttl duration] [--wait] [--timeout duration] [--json] <name>")
 		return ExitUsage
 	}
 	name := fs.Arg(0)
@@ -266,10 +218,9 @@ func cmdLock(args []string) int {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return ExitError
 	}
-	warnNetworkFS(rootDir)
 
 	auditor := audit.NewWriter(rootDir)
-	opts := lock.AcquireOptions{TTL: *ttl, Metadata: meta.data, Auditor: auditor}
+	opts := lock.AcquireOptions{TTL: *ttl, Auditor: auditor}
 
 	if *wait {
 		ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -702,52 +653,6 @@ func cmdExists(args []string) int {
 	return ExitOK
 }
 
-func cmdGetMeta(args []string) int {
-	if len(args) != 2 {
-		fmt.Fprintln(os.Stderr, "usage: lokt get-meta <name> <key>")
-		return ExitUsage
-	}
-
-	name := args[0]
-	key := args[1]
-
-	if err := lockfile.ValidateName(name); err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		return ExitError
-	}
-
-	rootDir, err := root.Find()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		return ExitError
-	}
-
-	lockPath := root.LockFilePath(rootDir, name)
-	lf, err := lockfile.Read(lockPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			fmt.Fprintf(os.Stderr, "error: lock %q not found\n", name)
-			return ExitNotFound
-		}
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		return ExitError
-	}
-
-	if lf.Metadata == nil {
-		fmt.Fprintf(os.Stderr, "error: lock %q has no metadata\n", name)
-		return ExitError
-	}
-
-	val, ok := lf.Metadata[key]
-	if !ok {
-		fmt.Fprintf(os.Stderr, "error: metadata key %q not found\n", key)
-		return ExitError
-	}
-
-	fmt.Println(val)
-	return ExitOK
-}
-
 func cmdGuard(args []string) int {
 	// Find "--" separator
 	dashIdx := -1
@@ -799,7 +704,6 @@ func cmdGuard(args []string) int {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return ExitError
 	}
-	warnNetworkFS(rootDir)
 
 	auditor := audit.NewWriter(rootDir)
 
@@ -1092,36 +996,34 @@ func readLockFile(path string) (*lockFile, error) {
 }
 
 type lockFile struct {
-	Version    int               `json:"version"`
-	Name       string            `json:"name"`
-	Owner      string            `json:"owner"`
-	Host       string            `json:"host"`
-	PID        int               `json:"pid"`
-	PIDStartNS int64             `json:"pid_start_ns,omitempty"`
-	AgentID    string            `json:"agent_id,omitempty"`
-	AcquiredAt time.Time         `json:"acquired_ts"`
-	TTLSec     int               `json:"ttl_sec,omitempty"`
-	ExpiresAt  *time.Time        `json:"expires_at,omitempty"`
-	Metadata   map[string]string `json:"metadata,omitempty"`
+	Version    int        `json:"version"`
+	Name       string     `json:"name"`
+	Owner      string     `json:"owner"`
+	Host       string     `json:"host"`
+	PID        int        `json:"pid"`
+	PIDStartNS int64      `json:"pid_start_ns,omitempty"`
+	AgentID    string     `json:"agent_id,omitempty"`
+	AcquiredAt time.Time  `json:"acquired_ts"`
+	TTLSec     int        `json:"ttl_sec,omitempty"`
+	ExpiresAt  *time.Time `json:"expires_at,omitempty"`
 }
 
 // statusOutput is the JSON structure for status --json output.
 type statusOutput struct {
-	Version    int               `json:"version"`
-	Name       string            `json:"name"`
-	Owner      string            `json:"owner"`
-	Host       string            `json:"host"`
-	PID        int               `json:"pid"`
-	PIDStartNS int64             `json:"pid_start_ns,omitempty"`
-	AgentID    string            `json:"agent_id,omitempty"`
-	AcquiredAt string            `json:"acquired_ts"`
-	TTLSec     int               `json:"ttl_sec,omitempty"`
-	ExpiresAt  string            `json:"expires_at,omitempty"`
-	AgeSec     int               `json:"age_sec"`
-	Expired    bool              `json:"expired"`
-	PIDStatus  string            `json:"pid_status"`
-	Freeze     bool              `json:"freeze,omitempty"`
-	Metadata   map[string]string `json:"metadata,omitempty"`
+	Version    int    `json:"version"`
+	Name       string `json:"name"`
+	Owner      string `json:"owner"`
+	Host       string `json:"host"`
+	PID        int    `json:"pid"`
+	PIDStartNS int64  `json:"pid_start_ns,omitempty"`
+	AgentID    string `json:"agent_id,omitempty"`
+	AcquiredAt string `json:"acquired_ts"`
+	TTLSec     int    `json:"ttl_sec,omitempty"`
+	ExpiresAt  string `json:"expires_at,omitempty"`
+	AgeSec     int    `json:"age_sec"`
+	Expired    bool   `json:"expired"`
+	PIDStatus  string `json:"pid_status"`
+	Freeze     bool   `json:"freeze,omitempty"`
 }
 
 func lockToStatusOutput(lf *lockFile, isFreeze bool) statusOutput {
@@ -1138,7 +1040,6 @@ func lockToStatusOutput(lf *lockFile, isFreeze bool) statusOutput {
 		AgeSec:     int(time.Since(lf.AcquiredAt).Seconds()),
 		Expired:    lf.IsExpired(),
 		PIDStatus:  pidLiveness(lf),
-		Metadata:   lf.Metadata,
 	}
 	if lf.ExpiresAt != nil {
 		out.ExpiresAt = lf.ExpiresAt.Format(time.RFC3339)
@@ -1214,7 +1115,6 @@ func cmdFreeze(args []string) int {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return ExitError
 	}
-	warnNetworkFS(rootDir)
 
 	auditor := audit.NewWriter(rootDir)
 	err = lock.Freeze(rootDir, name, lock.FreezeOptions{TTL: *ttl, Auditor: auditor})
@@ -1877,7 +1777,6 @@ func cmdDoctor(args []string) int {
 	// Run all health checks
 	results := []doctor.CheckResult{
 		doctor.CheckWritable(rootPath),
-		doctor.CheckNetworkFS(rootPath),
 		doctor.CheckClock(),
 		doctor.CheckLegacyFreezes(rootPath),
 	}

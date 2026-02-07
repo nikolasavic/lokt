@@ -93,20 +93,6 @@ func TestOverall(t *testing.T) {
 	}
 }
 
-func TestCheckNetworkFS_LocalDir(t *testing.T) {
-	// Test on a local temp directory - should pass
-	dir := t.TempDir()
-
-	result := CheckNetworkFS(dir)
-	// Should be OK for local filesystem (though might be "unknown" on some systems)
-	if result.Status == StatusFail {
-		t.Errorf("CheckNetworkFS() on local dir: status = %v, message = %s", result.Status, result.Message)
-	}
-	if result.Name != "network_fs" {
-		t.Errorf("CheckNetworkFS() name = %q, want %q", result.Name, "network_fs")
-	}
-}
-
 func TestCheckLegacyFreezes_None(t *testing.T) {
 	dir := t.TempDir()
 	locksDir := filepath.Join(dir, "locks")
@@ -236,54 +222,6 @@ func TestCheckWritable_CannotCreateDir(t *testing.T) {
 	if result.Message == "" {
 		t.Error("CheckWritable() on invalid path: message is empty")
 	}
-}
-
-func TestCheckNetworkFS_Nonexistent(t *testing.T) {
-	// Check nonexistent path - should return OK with "unknown" message
-	result := CheckNetworkFS("/nonexistent/path/that/does/not/exist")
-	if result.Status != StatusOK {
-		t.Errorf("CheckNetworkFS() on nonexistent path: status = %v, want OK", result.Status)
-	}
-	if result.Name != "network_fs" {
-		t.Errorf("CheckNetworkFS() name = %q, want %q", result.Name, "network_fs")
-	}
-}
-
-func TestCheckNetworkFS_RootDir(t *testing.T) {
-	// Check root directory - should work without error
-	result := CheckNetworkFS("/")
-	// Just verify it doesn't panic and returns valid result
-	if result.Name != "network_fs" {
-		t.Errorf("CheckNetworkFS(/) name = %q, want %q", result.Name, "network_fs")
-	}
-	// Status could be OK or Warn depending on system
-}
-
-func TestGetFSTypeName_LocalDir(t *testing.T) {
-	dir := t.TempDir()
-	name := GetFSTypeName(dir)
-	// Should return some filesystem name (varies by OS)
-	if name == "" {
-		t.Error("GetFSTypeName() returned empty string")
-	}
-	// On macOS it's typically apfs, on Linux ext4/tmpfs
-	t.Logf("GetFSTypeName(%q) = %q", dir, name)
-}
-
-func TestGetFSTypeName_Nonexistent(t *testing.T) {
-	name := GetFSTypeName("/nonexistent/path/that/does/not/exist")
-	if name != "unknown" {
-		t.Errorf("GetFSTypeName() on nonexistent = %q, want %q", name, "unknown")
-	}
-}
-
-func TestGetFSTypeName_Root(t *testing.T) {
-	name := GetFSTypeName("/")
-	// Should return some name
-	if name == "" {
-		t.Error("GetFSTypeName(/) returned empty string")
-	}
-	t.Logf("GetFSTypeName(/) = %q", name)
 }
 
 func TestCheckWritable_WriteError(t *testing.T) {
