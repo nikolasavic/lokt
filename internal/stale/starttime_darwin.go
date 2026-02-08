@@ -13,13 +13,37 @@ import (
 // cannot be retrieved.
 var ErrStartTimeNotSupported = errors.New("process start time not supported")
 
+// sysctlFn wraps the sysctl syscall for testability.
+var sysctlFn = func(mib []int32, old []byte, oldlen *uintptr) error {
+	_, _, errno := syscall.Syscall6(
+		syscall.SYS___SYSCTL,
+		uintptr(unsafe.Pointer(&mib[0])), //nolint:gosec // sysctl requires pointer
+		uintptr(len(mib)),                //nolint:gosec // MIB length
+		pointerOrZero(old),               //nolint:gosec // sysctl output buffer
+		uintptr(unsafe.Pointer(oldlen)),  //nolint:gosec // sysctl requires pointer
+		0,                                //nolint:gosec // NULL newp
+		0,                                //nolint:gosec // newlen=0
+	)
+	if errno != 0 {
+		return errno
+	}
+	return nil
+}
+
+func pointerOrZero(b []byte) uintptr {
+	if len(b) == 0 {
+		return 0
+	}
+	return uintptr(unsafe.Pointer(&b[0])) //nolint:gosec // sysctl output buffer
+}
+
 // GetProcessStartTime returns the process start time as nanoseconds since
 // the Unix epoch. On macOS, uses sysctl KERN_PROC to read kinfo_proc and
 // extract p_starttime.
 //
 // Returns (0, error) if the process doesn't exist or the syscall fails.
 func GetProcessStartTime(pid int) (int64, error) {
-	mib := [4]int32{
+	mib := []int32{
 		1,          // CTL_KERN
 		14,         // KERN_PROC
 		1,          // KERN_PROC_PID
@@ -28,35 +52,16 @@ func GetProcessStartTime(pid int) (int64, error) {
 
 	// Query the required buffer size first.
 	n := uintptr(0)
-	//nolint:gosec // unsafe.Pointer required for sysctl syscall interface
-	_, _, errno := syscall.Syscall6(
-		syscall.SYS___SYSCTL,
-		uintptr(unsafe.Pointer(&mib[0])), //nolint:gosec // sysctl requires pointer
-		4,                                //nolint:gosec // MIB length
-		0,                                //nolint:gosec // NULL oldp for size query
-		uintptr(unsafe.Pointer(&n)),      //nolint:gosec // sysctl requires pointer
-		0,                                //nolint:gosec // NULL newp
-		0,                                //nolint:gosec // newlen=0
-	)
-	if errno != 0 {
-		return 0, errno
+	if err := sysctlFn(mib, nil, &n); err != nil {
+		return 0, err
 	}
 	if n == 0 {
 		return 0, errors.New("process not found")
 	}
 
 	buf := make([]byte, n)
-	_, _, errno = syscall.Syscall6(
-		syscall.SYS___SYSCTL,
-		uintptr(unsafe.Pointer(&mib[0])), //nolint:gosec // sysctl requires pointer
-		4,
-		uintptr(unsafe.Pointer(&buf[0])), //nolint:gosec // sysctl output buffer
-		uintptr(unsafe.Pointer(&n)),      //nolint:gosec // sysctl requires pointer
-		0,
-		0,
-	)
-	if errno != 0 {
-		return 0, errno
+	if err := sysctlFn(mib, buf, &n); err != nil {
+		return 0, err
 	}
 
 	// kinfo_proc starts with extern_proc, whose first field is p_starttime.

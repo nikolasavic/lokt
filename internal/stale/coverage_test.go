@@ -1,6 +1,7 @@
 package stale
 
 import (
+	"errors"
 	"os"
 	"testing"
 )
@@ -30,6 +31,57 @@ func TestGetProcessStartTime_NegativePID(t *testing.T) {
 	_, err := GetProcessStartTime(-1)
 	if err == nil {
 		t.Error("GetProcessStartTime(-1) should return error")
+	}
+}
+
+func TestGetProcessStartTime_SysctlSizeError(t *testing.T) {
+	old := sysctlFn
+	defer func() { sysctlFn = old }()
+
+	sysctlFn = func(_ []int32, _ []byte, _ *uintptr) error {
+		return errors.New("sysctl failed")
+	}
+
+	_, err := GetProcessStartTime(1)
+	if err == nil {
+		t.Fatal("expected error from sysctl size query")
+	}
+}
+
+func TestGetProcessStartTime_SysctlZeroSize(t *testing.T) {
+	old := sysctlFn
+	defer func() { sysctlFn = old }()
+
+	sysctlFn = func(_ []int32, _ []byte, oldlen *uintptr) error {
+		*oldlen = 0
+		return nil
+	}
+
+	_, err := GetProcessStartTime(1)
+	if err == nil {
+		t.Fatal("expected 'process not found' error")
+	}
+}
+
+func TestGetProcessStartTime_SysctlDataError(t *testing.T) {
+	old := sysctlFn
+	defer func() { sysctlFn = old }()
+
+	call := 0
+	sysctlFn = func(_ []int32, _ []byte, oldlen *uintptr) error {
+		call++
+		if call == 1 {
+			// Size query succeeds with some size
+			*oldlen = 648
+			return nil
+		}
+		// Data query fails
+		return errors.New("sysctl data failed")
+	}
+
+	_, err := GetProcessStartTime(1)
+	if err == nil {
+		t.Fatal("expected error from sysctl data query")
 	}
 }
 
