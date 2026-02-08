@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"syscall"
 	"time"
@@ -79,6 +80,8 @@ func main() {
 		code = cmdDoctor(args)
 	case "why":
 		code = cmdWhy(args)
+	case "prime":
+		code = cmdPrime(args)
 	case "demo":
 		code = cmdDemo(args)
 	case "help", "-h", "--help":
@@ -128,6 +131,9 @@ func usage() {
 	fmt.Println("    --json          Output in JSON format")
 	fmt.Println("  doctor            Validate lokt setup")
 	fmt.Println("    --json          Output in JSON format")
+	fmt.Println("  prime             Output agent context for AI tool integration")
+	fmt.Println("    --format name   Output format: claude-md, cursorrules, windsurfrules,")
+	fmt.Println("                    copilot, clinerules, aider")
 	fmt.Println("  demo              Generate hexwall demo script")
 	fmt.Println("  version           Show version info")
 	fmt.Println()
@@ -1870,4 +1876,456 @@ func overallDescription(s doctor.Status) string {
 	default:
 		return "UNKNOWN"
 	}
+}
+
+// --- prime command ---
+
+// guardedScript represents a wrapper script discovered by scanning for lokt guard invocations.
+type guardedScript struct {
+	Path    string // relative path to the script (e.g., "./scripts/build.sh")
+	Lock    string // lock name from the guard invocation
+	Command string // the guarded command (everything after --)
+}
+
+// guardLineRegexp matches lines containing "lokt guard ... -- <command>".
+// We split on " -- " to get the guard args and the command separately,
+// then parse the lock name from the guard args.
+var guardLineRegexp = regexp.MustCompile(`lokt\s+guard\s+(.+?)\s+--\s+(.+)`)
+
+func cmdPrime(args []string) int {
+	fs := flag.NewFlagSet("prime", flag.ExitOnError)
+	format := fs.String("format", "", "Output format: claude-md, cursorrules, windsurfrules, copilot, clinerules, aider")
+	_ = fs.Parse(args)
+
+	rootDir, err := root.Find()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: lokt root not found (%v)\n", err)
+		fmt.Fprintln(os.Stderr, "hint: run 'lokt doctor' to diagnose setup issues")
+		return ExitError
+	}
+
+	me := identity.Current()
+	scripts := discoverGuardedScripts(rootDir)
+	locks := scanCurrentLocks(rootDir)
+
+	if *format != "" {
+		return renderFormat(*format, scripts, me)
+	}
+
+	// Default: dynamic markdown for hook injection
+	renderDefaultPrime(scripts, locks, me)
+	return ExitOK
+}
+
+func renderDefaultPrime(scripts []guardedScript, locks []primeLockInfo, me identity.Identity) {
+	fmt.Println("# Lokt Coordination Active")
+	fmt.Println()
+	fmt.Println("This repo uses lokt for lock coordination. Multiple agents share this workspace.")
+	fmt.Println()
+
+	// Guarded Operations
+	if len(scripts) > 0 {
+		fmt.Println("## Guarded Operations")
+		fmt.Println()
+		fmt.Println("Use these wrapper scripts instead of raw commands:")
+		fmt.Println()
+		fmt.Println("| Operation | Use this | NOT this |")
+		fmt.Println("|-----------|----------|----------|")
+		for _, s := range scripts {
+			fmt.Printf("| %s | `%s` | `%s` |\n", s.Lock, s.Path, s.Command)
+		}
+	} else {
+		fmt.Println("## Guarded Operations")
+		fmt.Println()
+		fmt.Println("No wrapper scripts detected. Wrap mutating commands with `lokt guard`:")
+		fmt.Println()
+		fmt.Println("    lokt guard build --ttl 5m -- make build")
+		fmt.Println("    lokt guard git-push --ttl 2m -- git pull --rebase && git push")
+	}
+	fmt.Println()
+
+	// Behavioral rules
+	fmt.Println("## If a command fails with \"lock held by another\"")
+	fmt.Println()
+	fmt.Println("Another agent is running the same operation. Do NOT retry immediately.")
+	fmt.Println("- If the task can wait: move to other work and come back later")
+	fmt.Println("- If urgent: tell the user the resource is locked")
+	fmt.Println()
+
+	// Diagnostics
+	fmt.Println("## Lock diagnostics")
+	fmt.Println()
+	fmt.Println("- `lokt status` — see who holds what")
+	fmt.Println("- `lokt why <name>` — explain why a lock can't be acquired")
+	fmt.Println()
+
+	// Identity
+	fmt.Println("## Your Identity")
+	fmt.Println()
+	fmt.Printf("You are: %s@%s\n", me.Owner, me.Host)
+	fmt.Println()
+
+	// Current Status
+	fmt.Println("## Current Status")
+	fmt.Println()
+	if len(locks) == 0 {
+		fmt.Println("No locks held.")
+	} else {
+		for _, l := range locks {
+			status := ""
+			if l.Freeze {
+				status = " [FROZEN]"
+			}
+			if l.Expired {
+				status += " [EXPIRED]"
+			}
+			fmt.Printf("- **%s** held by %s@%s for %s%s\n", l.Name, l.Owner, l.Host, l.Age, status)
+		}
+	}
+}
+
+// renderFormat outputs a static snippet for a specific agent tool config file.
+func renderFormat(format string, scripts []guardedScript, me identity.Identity) int {
+	switch format {
+	case "claude-md":
+		renderClaudeMD(scripts, me)
+	case "cursorrules":
+		renderCursorRules(scripts, me)
+	case "windsurfrules":
+		renderWindsurfRules(scripts, me)
+	case "copilot":
+		renderCopilot(scripts, me)
+	case "clinerules":
+		renderClineRules(scripts, me)
+	case "aider":
+		renderAider(scripts)
+	default:
+		fmt.Fprintf(os.Stderr, "error: unknown format %q\n", format)
+		fmt.Fprintln(os.Stderr, "supported formats: claude-md, cursorrules, windsurfrules, copilot, clinerules, aider")
+		return ExitUsage
+	}
+	return ExitOK
+}
+
+func renderClaudeMD(scripts []guardedScript, me identity.Identity) {
+	fmt.Println("## Concurrent Operations (Lokt)")
+	fmt.Println()
+	fmt.Println("This project uses lokt for lock coordination. Multiple agents work in this repo.")
+	fmt.Println()
+	renderScriptTable(scripts)
+	fmt.Println()
+	fmt.Println("### If a command fails with \"lock held by another\"")
+	fmt.Println()
+	fmt.Println("Another agent is running the same operation. Do NOT retry immediately.")
+	fmt.Println("- If the task can wait: move to other work and come back later")
+	fmt.Println("- If urgent: inform the user that the resource is locked")
+	fmt.Println()
+	fmt.Println("### Lock diagnostics")
+	fmt.Println()
+	fmt.Println("- `lokt status` — see who holds what")
+	fmt.Println("- `lokt why <name>` — explain why a lock can't be acquired")
+}
+
+func renderCursorRules(scripts []guardedScript, me identity.Identity) {
+	fmt.Println("# Lokt Lock Coordination")
+	fmt.Println()
+	fmt.Println("This project uses lokt for lock coordination. Multiple agents share this workspace.")
+	fmt.Println()
+	if len(scripts) > 0 {
+		fmt.Println("MANDATORY: Use wrapper scripts for all mutating shared operations:")
+		for _, s := range scripts {
+			fmt.Printf("- ALWAYS use `%s` instead of `%s`\n", s.Path, s.Command)
+		}
+	} else {
+		fmt.Println("MANDATORY: Wrap mutating shared operations with `lokt guard`:")
+		fmt.Println("- `lokt guard build --ttl 5m -- make build`")
+		fmt.Println("- `lokt guard git-push --ttl 2m -- git pull --rebase && git push`")
+	}
+	fmt.Println()
+	fmt.Println("If a command fails with \"lock held by another\", do NOT retry immediately.")
+	fmt.Println("Move to other work and come back later, or tell the user the resource is locked.")
+	fmt.Println()
+	fmt.Println("Lock diagnostics: `lokt status` or `lokt why <name>`")
+}
+
+func renderWindsurfRules(scripts []guardedScript, _ identity.Identity) {
+	// Ultra-compact: must stay well under 2000 chars to leave room for other rules
+	fmt.Println("# Lokt Lock Coordination")
+	fmt.Println()
+	if len(scripts) > 0 {
+		fmt.Println("Use wrapper scripts, not raw commands:")
+		for _, s := range scripts {
+			fmt.Printf("- `%s` (not `%s`)\n", s.Path, s.Command)
+		}
+	} else {
+		fmt.Println("Wrap mutating commands: `lokt guard <name> --ttl 5m -- <cmd>`")
+	}
+	fmt.Println()
+	fmt.Println("If \"lock held by another\": move to other work, do not retry.")
+}
+
+func renderCopilot(scripts []guardedScript, me identity.Identity) {
+	// Same structure as claude-md, GitHub Copilot uses markdown
+	renderClaudeMD(scripts, me)
+}
+
+func renderClineRules(scripts []guardedScript, me identity.Identity) {
+	fmt.Println("---")
+	fmt.Println("description: Lokt lock coordination rules")
+	fmt.Println("---")
+	fmt.Println()
+	fmt.Println("# Lokt Lock Coordination")
+	fmt.Println()
+	fmt.Println("This project uses lokt for lock coordination. Multiple agents share this workspace.")
+	fmt.Println()
+	renderScriptTable(scripts)
+	fmt.Println()
+	fmt.Println("If a command fails with \"lock held by another\", do NOT retry immediately.")
+	fmt.Println("Move to other work and come back later, or tell the user the resource is locked.")
+	fmt.Println()
+	fmt.Println("Lock diagnostics: `lokt status` or `lokt why <name>`")
+}
+
+func renderAider(scripts []guardedScript) {
+	// YAML format for .aider.conf.yml
+	if len(scripts) > 0 {
+		fmt.Println("# Lokt lock coordination - use wrapper scripts")
+		for _, s := range scripts {
+			// Aider only supports lint-cmd and test-cmd, map what we can
+			switch {
+			case strings.Contains(s.Lock, "lint") || strings.Contains(s.Lock, "fmt"):
+				fmt.Printf("lint-cmd: %s\n", s.Path)
+			case strings.Contains(s.Lock, "test"):
+				fmt.Printf("test-cmd: %s\n", s.Path)
+			}
+		}
+		fmt.Println()
+		fmt.Println("# Other guarded operations (use in terminal):")
+		for _, s := range scripts {
+			fmt.Printf("# %s -> %s\n", s.Command, s.Path)
+		}
+	} else {
+		fmt.Println("# Lokt lock coordination")
+		fmt.Println("# Wrap mutating commands with: lokt guard <name> --ttl 5m -- <cmd>")
+	}
+}
+
+// renderScriptTable outputs a markdown table of wrapper scripts.
+func renderScriptTable(scripts []guardedScript) {
+	if len(scripts) > 0 {
+		fmt.Println("### MANDATORY: Use wrapper scripts, not raw commands")
+		fmt.Println()
+		fmt.Println("| Operation | Use this | NOT this |")
+		fmt.Println("|-----------|----------|----------|")
+		for _, s := range scripts {
+			fmt.Printf("| %s | `%s` | `%s` |\n", s.Lock, s.Path, s.Command)
+		}
+	} else {
+		fmt.Println("### Wrap mutating commands with lokt guard")
+		fmt.Println()
+		fmt.Println("    lokt guard build --ttl 5m -- make build")
+		fmt.Println("    lokt guard git-push --ttl 2m -- git pull --rebase && git push")
+	}
+}
+
+// --- prime: wrapper script auto-discovery ---
+
+func discoverGuardedScripts(rootDir string) []guardedScript {
+	// Find project root (parent of .git/lokt/ or .lokt/)
+	projectRoot := findProjectRoot(rootDir)
+
+	var scripts []guardedScript
+	seen := make(map[string]bool) // deduplicate by lock name
+
+	// Scan directories in priority order
+	dirs := []string{
+		filepath.Join(projectRoot, "scripts"),
+		filepath.Join(projectRoot, "bin"),
+		filepath.Join(projectRoot, ".github", "scripts"),
+		projectRoot,
+	}
+
+	for _, dir := range dirs {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".sh") {
+				continue
+			}
+			path := filepath.Join(dir, entry.Name())
+			found := parseGuardedScript(path, projectRoot)
+			for _, s := range found {
+				if !seen[s.Lock] {
+					seen[s.Lock] = true
+					scripts = append(scripts, s)
+				}
+			}
+		}
+	}
+
+	return scripts
+}
+
+// findProjectRoot determines the project root from the lokt root directory.
+func findProjectRoot(rootDir string) string {
+	// If rootDir is .git/lokt/, project root is two levels up
+	if strings.HasSuffix(filepath.Dir(rootDir), ".git") {
+		return filepath.Dir(filepath.Dir(rootDir))
+	}
+	// If rootDir is .lokt/, project root is one level up
+	if filepath.Base(rootDir) == ".lokt" || filepath.Base(rootDir) == "lokt" {
+		return filepath.Dir(rootDir)
+	}
+	// Fallback: try git rev-parse
+	cmd := exec.Command("git", "rev-parse", "--show-toplevel")
+	out, err := cmd.Output()
+	if err == nil {
+		return strings.TrimSpace(string(out))
+	}
+	return filepath.Dir(rootDir)
+}
+
+// parseGuardedScript reads a shell script and extracts lokt guard invocations.
+func parseGuardedScript(path, projectRoot string) []guardedScript {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+
+	content := string(data)
+	matches := guardLineRegexp.FindAllStringSubmatch(content, -1)
+	if len(matches) == 0 {
+		return nil
+	}
+
+	relPath, err := filepath.Rel(projectRoot, path)
+	if err != nil {
+		relPath = path
+	}
+	if !strings.HasPrefix(relPath, ".") {
+		relPath = "./" + relPath
+	}
+
+	var scripts []guardedScript
+	for _, m := range matches {
+		guardArgs := m[1] // everything between "guard" and "--"
+		command := strings.TrimSpace(m[2])
+
+		lockName := extractLockName(guardArgs)
+		if lockName == "" {
+			continue
+		}
+
+		// Clean up the command: truncate long commands
+		if len(command) > 60 {
+			command = command[:57] + "..."
+		}
+
+		scripts = append(scripts, guardedScript{
+			Path:    relPath,
+			Lock:    lockName,
+			Command: command,
+		})
+	}
+
+	return scripts
+}
+
+// extractLockName finds the lock name from guard arguments.
+// The lock name is the first token that is not a flag (--xxx) and not a flag value.
+// Flags that take values: --ttl, --timeout.
+func extractLockName(args string) string {
+	tokens := strings.Fields(args)
+	flagsWithValue := map[string]bool{"--ttl": true, "--timeout": true}
+	skipNext := false
+
+	for _, tok := range tokens {
+		if skipNext {
+			skipNext = false
+			continue
+		}
+		if strings.HasPrefix(tok, "-") {
+			if flagsWithValue[tok] {
+				skipNext = true // next token is the flag value
+			}
+			continue
+		}
+		// This token doesn't start with "-" — it's the lock name candidate.
+		// Skip variables ($VAR, "${VAR}"), placeholders (<name>), and quoted strings.
+		if strings.ContainsAny(tok, "$<>\"'\\") {
+			continue
+		}
+		return tok
+	}
+	return ""
+}
+
+// --- prime: lock status scanning ---
+
+type primeLockInfo struct {
+	Name    string
+	Owner   string
+	Host    string
+	Age     string
+	Expired bool
+	Freeze  bool
+}
+
+func scanCurrentLocks(rootDir string) []primeLockInfo {
+	var locks []primeLockInfo
+
+	// Scan regular locks
+	locksDir := root.LocksPath(rootDir)
+	lockEntries, _ := os.ReadDir(locksDir)
+	for _, entry := range lockEntries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if len(name) > 5 && name[len(name)-5:] == ".json" {
+			lockName := name[:len(name)-5]
+			path := root.LockFilePath(rootDir, lockName)
+			lf, err := readLockFile(path)
+			if err == nil {
+				age := time.Since(lf.AcquiredAt).Truncate(time.Second)
+				locks = append(locks, primeLockInfo{
+					Name:    lockName,
+					Owner:   lf.Owner,
+					Host:    lf.Host,
+					Age:     age.String(),
+					Expired: lf.IsExpired(),
+				})
+			}
+		}
+	}
+
+	// Scan freezes
+	freezesDir := root.FreezesPath(rootDir)
+	freezeEntries, _ := os.ReadDir(freezesDir)
+	for _, entry := range freezeEntries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if len(name) > 5 && name[len(name)-5:] == ".json" {
+			freezeName := name[:len(name)-5]
+			path := root.FreezeFilePath(rootDir, freezeName)
+			lf, err := readLockFile(path)
+			if err == nil {
+				age := time.Since(lf.AcquiredAt).Truncate(time.Second)
+				locks = append(locks, primeLockInfo{
+					Name:    freezeName,
+					Owner:   lf.Owner,
+					Host:    lf.Host,
+					Age:     age.String(),
+					Expired: lf.IsExpired(),
+					Freeze:  true,
+				})
+			}
+		}
+	}
+
+	return locks
 }
