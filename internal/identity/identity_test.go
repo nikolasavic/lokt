@@ -1,6 +1,7 @@
 package identity
 
 import (
+	"errors"
 	"os"
 	"os/user"
 	"regexp"
@@ -132,5 +133,42 @@ func TestCurrent_AgentIDAutoGen(t *testing.T) {
 	}
 	if !matched {
 		t.Errorf("AgentID = %q, want pattern agent-XXXX", id.AgentID)
+	}
+}
+
+func TestGetOwner_UnknownFallback(t *testing.T) {
+	t.Setenv(EnvLoktOwner, "")
+
+	old := userCurrentFn
+	defer func() { userCurrentFn = old }()
+	userCurrentFn = func() (*user.User, error) { return nil, errors.New("no user db") }
+
+	if owner := getOwner(); owner != "unknown" {
+		t.Errorf("getOwner() = %q, want %q", owner, "unknown")
+	}
+}
+
+func TestGetHost_UnknownFallback(t *testing.T) {
+	old := osHostnameFn
+	defer func() { osHostnameFn = old }()
+	osHostnameFn = func() (string, error) { return "", errors.New("no hostname") }
+
+	if host := getHost(); host != "unknown" {
+		t.Errorf("getHost() = %q, want %q", host, "unknown")
+	}
+}
+
+func TestGenerateAgentID_StartTimeError(t *testing.T) {
+	old := getProcessStartTimeFn
+	defer func() { getProcessStartTimeFn = old }()
+	getProcessStartTimeFn = func(pid int) (int64, error) { return 0, errors.New("unsupported") }
+
+	id := generateAgentID()
+	matched, err := regexp.MatchString(`^agent-[0-9a-f]{4}$`, id)
+	if err != nil {
+		t.Fatalf("regexp error: %v", err)
+	}
+	if !matched {
+		t.Errorf("generateAgentID() = %q, want pattern agent-XXXX", id)
 	}
 }

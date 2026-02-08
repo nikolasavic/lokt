@@ -25,6 +25,21 @@ func TestIsProcessAlive_ZeroPID(t *testing.T) {
 	_ = IsProcessAlive(0)
 }
 
+func TestGetProcessStartTime_NegativePID(t *testing.T) {
+	// Negative PIDs may trigger sysctl errno on some platforms
+	_, err := GetProcessStartTime(-1)
+	if err == nil {
+		t.Error("GetProcessStartTime(-1) should return error")
+	}
+}
+
+func TestGetProcessStartTime_ZeroPID(t *testing.T) {
+	// PID 0 is the kernel scheduler — behavior varies by platform
+	_, err := GetProcessStartTime(0)
+	// We just verify it doesn't panic; error is acceptable
+	_ = err
+}
+
 func TestGetProcessStartTime_PID1(t *testing.T) {
 	// PID 1 should have a valid start time
 	ns, err := GetProcessStartTime(1)

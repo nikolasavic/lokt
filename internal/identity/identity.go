@@ -11,6 +11,13 @@ import (
 	"github.com/nikolasavic/lokt/internal/stale"
 )
 
+// Injectable functions for testability.
+var (
+	userCurrentFn         = user.Current
+	osHostnameFn          = os.Hostname
+	getProcessStartTimeFn = stale.GetProcessStartTime
+)
+
 const EnvLoktOwner = "LOKT_OWNER"
 
 // EnvLoktAgentID overrides the auto-generated agent identifier.
@@ -40,14 +47,14 @@ func getOwner() string {
 	if owner := os.Getenv(EnvLoktOwner); owner != "" {
 		return owner
 	}
-	if u, err := user.Current(); err == nil {
+	if u, err := userCurrentFn(); err == nil {
 		return u.Username
 	}
 	return "unknown"
 }
 
 func getHost() string {
-	if host, err := os.Hostname(); err == nil {
+	if host, err := osHostnameFn(); err == nil {
 		return host
 	}
 	return "unknown"
@@ -72,7 +79,7 @@ func getAgentID() string {
 // process's PID and start time. Format: "agent-XXXX" (4 hex digits).
 func generateAgentID() string {
 	pid := os.Getpid()
-	startNS, err := stale.GetProcessStartTime(pid)
+	startNS, err := getProcessStartTimeFn(pid)
 	// If start time unavailable (Windows, etc.), use PID alone.
 	// Less collision-resistant but still functional.
 	input := fmt.Sprintf("%d-%d", pid, startNS)

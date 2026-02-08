@@ -76,3 +76,51 @@ func TestWriterEmit_WriteError(t *testing.T) {
 		PID:   1,
 	})
 }
+
+func TestWriterEmit_WriteFailsOnPipe(t *testing.T) {
+	dir := t.TempDir()
+	w := NewWriter(dir)
+
+	old := openFileFn
+	defer func() { openFileFn = old }()
+
+	openFileFn = func(_ string, _ int, _ os.FileMode) (*os.File, error) {
+		// Pipe with closed read end: writes fail with EPIPE
+		r, pw, err := os.Pipe()
+		if err != nil {
+			return nil, err
+		}
+		_ = r.Close()
+		return pw, nil
+	}
+
+	// Should not panic — Write fails, error is logged to stderr
+	w.Emit(&Event{Event: EventAcquire, Name: "test", Owner: "alice", Host: "h1", PID: 1})
+}
+
+func TestWriterEmit_SyncFailsOnPipe(t *testing.T) {
+	dir := t.TempDir()
+	w := NewWriter(dir)
+
+	old := openFileFn
+	defer func() { openFileFn = old }()
+
+	var readers []*os.File
+	openFileFn = func(_ string, _ int, _ os.FileMode) (*os.File, error) {
+		// Pipe with read end open: writes succeed, Sync (fsync) fails
+		r, pw, err := os.Pipe()
+		if err != nil {
+			return nil, err
+		}
+		readers = append(readers, r)
+		return pw, nil
+	}
+	defer func() {
+		for _, r := range readers {
+			_ = r.Close()
+		}
+	}()
+
+	// Write succeeds (pipe buffer), Sync fails (EINVAL on pipe fd)
+	w.Emit(&Event{Event: EventAcquire, Name: "test", Owner: "alice", Host: "h1", PID: 1})
+}

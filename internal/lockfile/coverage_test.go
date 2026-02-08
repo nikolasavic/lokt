@@ -1,6 +1,7 @@
 package lockfile
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -83,6 +84,115 @@ func TestWrite_ReadOnlyDir(t *testing.T) {
 	err := Write(filepath.Join(readonlyDir, "test.json"), lock)
 	if err == nil {
 		t.Fatal("Write() to read-only dir should fail")
+	}
+}
+
+func TestGenerateLockID_RandFailFallback(t *testing.T) {
+	old := randReadFn
+	defer func() { randReadFn = old }()
+	randReadFn = func(b []byte) (int, error) { return 0, errors.New("entropy exhausted") }
+
+	id := GenerateLockID()
+	if len(id) != 32 {
+		t.Errorf("GenerateLockID() fallback length = %d, want 32", len(id))
+	}
+	// Should be a hex-encoded timestamp
+	if id == "" {
+		t.Error("GenerateLockID() fallback should not be empty")
+	}
+}
+
+func TestWrite_WriteError(t *testing.T) {
+	old := createTempFn
+	defer func() { createTempFn = old }()
+
+	createTempFn = func(_ string, _ string) (*os.File, error) {
+		// Return a pipe with closed read end — Write will fail with EPIPE
+		r, pw, err := os.Pipe()
+		if err != nil {
+			return nil, err
+		}
+		_ = r.Close()
+		return pw, nil
+	}
+
+	lock := &Lock{
+		Version:    CurrentLockfileVersion,
+		Name:       "test",
+		Owner:      "alice",
+		Host:       "h1",
+		PID:        1,
+		AcquiredAt: time.Now(),
+	}
+
+	err := Write(filepath.Join(t.TempDir(), "test.json"), lock)
+	if err == nil {
+		t.Fatal("Write() should fail when tmp.Write fails")
+	}
+}
+
+func TestWrite_SyncError(t *testing.T) {
+	old := createTempFn
+	defer func() { createTempFn = old }()
+
+	var readers []*os.File
+	createTempFn = func(_ string, _ string) (*os.File, error) {
+		// Pipe with open read end: Write succeeds, Sync fails (EINVAL on pipe)
+		r, pw, err := os.Pipe()
+		if err != nil {
+			return nil, err
+		}
+		readers = append(readers, r)
+		return pw, nil
+	}
+	defer func() {
+		for _, r := range readers {
+			_ = r.Close()
+		}
+	}()
+
+	lock := &Lock{
+		Version:    CurrentLockfileVersion,
+		Name:       "test",
+		Owner:      "alice",
+		Host:       "h1",
+		PID:        1,
+		AcquiredAt: time.Now(),
+	}
+
+	err := Write(filepath.Join(t.TempDir(), "test.json"), lock)
+	if err == nil {
+		t.Fatal("Write() should fail when tmp.Sync fails")
+	}
+}
+
+func TestWrite_RenameError(t *testing.T) {
+	// Rename fails when source and destination are on different filesystems (EXDEV),
+	// or when destination dir doesn't exist. We test the latter.
+	dir := t.TempDir()
+	lock := &Lock{
+		Version:    CurrentLockfileVersion,
+		Name:       "test",
+		Owner:      "alice",
+		Host:       "h1",
+		PID:        1,
+		AcquiredAt: time.Now(),
+	}
+
+	// Write to a path whose parent doesn't exist — Rename will fail
+	// But CreateTemp uses the parent dir, which must exist. So we need
+	// CreateTemp to write to a real dir, but Rename to target a missing dir.
+	old := createTempFn
+	defer func() { createTempFn = old }()
+	createTempFn = func(_ string, pattern string) (*os.File, error) {
+		// Create temp in a DIFFERENT directory than the target
+		return os.CreateTemp(dir, pattern)
+	}
+
+	// Target is in /nonexistent/ — Rename will fail with EXDEV or ENOENT
+	err := Write("/nonexistent/dir/test.json", lock)
+	if err == nil {
+		t.Fatal("Write() should fail when Rename fails")
 	}
 }
 

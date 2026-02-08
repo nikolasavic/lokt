@@ -1,6 +1,7 @@
 package root
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -298,6 +299,29 @@ func TestFindWithMethod_LocalFallback(t *testing.T) {
 	// Path should end with .lokt
 	if !strings.HasSuffix(path, string(filepath.Separator)+DirName) {
 		t.Errorf("FindWithMethod() path = %q, want suffix '/%s'", path, DirName)
+	}
+}
+
+func TestFindWithMethod_GetwdError(t *testing.T) {
+	t.Setenv(EnvLoktRoot, "")
+
+	// Use a non-git directory so findGitRoot fails and we reach the getwd path
+	nonGitDir := t.TempDir()
+	cleanup := withWorkingDir(t, nonGitDir)
+	defer cleanup()
+
+	old := getwdFn
+	defer func() { getwdFn = old }()
+	getwdFn = func() (string, error) {
+		return "", errors.New("getwd: no such file or directory")
+	}
+
+	_, method, err := FindWithMethod()
+	if err == nil {
+		t.Error("expected error when getwd fails")
+	}
+	if method != MethodLocalDir {
+		t.Errorf("method = %v, want MethodLocalDir", method)
 	}
 }
 

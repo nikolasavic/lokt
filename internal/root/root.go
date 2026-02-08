@@ -15,6 +15,9 @@ const (
 	FreezesDir  = "freezes"
 )
 
+// Injectable function for testability.
+var getwdFn = os.Getwd
+
 // DiscoveryMethod indicates how the Lokt root was discovered.
 type DiscoveryMethod int
 
@@ -64,7 +67,7 @@ func FindWithMethod() (string, DiscoveryMethod, error) {
 	}
 
 	// 3. Fall back to .lokt/ in cwd
-	cwd, err := os.Getwd()
+	cwd, err := getwdFn()
 	if err != nil {
 		return "", MethodLocalDir, err
 	}

@@ -17,6 +17,12 @@ import (
 // CurrentLockfileVersion is the schema version written to all new lock files.
 const CurrentLockfileVersion = 1
 
+// Injectable functions for testability.
+var (
+	randReadFn   = rand.Read
+	createTempFn = os.CreateTemp
+)
+
 // Lock represents the JSON structure of a lock file.
 type Lock struct {
 	Version    int        `json:"version"`
@@ -37,7 +43,7 @@ type Lock struct {
 // timestamp-based ID if the entropy source fails.
 func GenerateLockID() string {
 	b := make([]byte, 16)
-	if _, err := rand.Read(b); err != nil {
+	if _, err := randReadFn(b); err != nil {
 		fmt.Fprintf(os.Stderr, "lokt: crypto/rand failed, using timestamp fallback: %v\n", err)
 		return fmt.Sprintf("%032x", time.Now().UnixNano())
 	}
@@ -154,7 +160,7 @@ func Write(path string, lock *Lock) error {
 	data = append(data, '\n')
 
 	dir := filepath.Dir(path)
-	tmp, err := os.CreateTemp(dir, ".lock-*.tmp")
+	tmp, err := createTempFn(dir, ".lock-*.tmp")
 	if err != nil {
 		return err
 	}
