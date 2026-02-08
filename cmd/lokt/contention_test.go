@@ -94,25 +94,25 @@ func TestMultiProcessContention(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 
-	// Kill the winner's sleep child so the guard exits and wg completes
+	// Kill the winner's sleep child so the guard exits and wg completes.
+	// Retry reads to handle transient mid-write states under heavy load.
 	lockPath := filepath.Join(locksDir, lockName+".json")
-	data, err := os.ReadFile(lockPath)
-	if err != nil {
-		// Wait a bit more then try again
-		time.Sleep(500 * time.Millisecond)
-		data, err = os.ReadFile(lockPath)
-		if err != nil {
-			t.Fatalf("read lockfile: %v", err)
-		}
-	}
-
 	var lockData struct {
 		Owner  string `json:"owner"`
 		PID    int    `json:"pid"`
 		LockID string `json:"lock_id"`
 	}
-	if err := json.Unmarshal(data, &lockData); err != nil {
-		t.Fatalf("parse lockfile: %v", err)
+	for i := range 10 {
+		data, err := os.ReadFile(lockPath)
+		if err == nil {
+			if json.Unmarshal(data, &lockData) == nil && lockData.PID > 0 {
+				break
+			}
+		}
+		if i == 9 {
+			t.Fatalf("read lockfile after 10 retries: last err=%v", err)
+		}
+		time.Sleep(200 * time.Millisecond)
 	}
 
 	// Kill the guard process (which holds the lock)
@@ -122,11 +122,12 @@ func TestMultiProcessContention(t *testing.T) {
 
 	wg.Wait()
 
-	// Count winners and losers
+	// Count winners and losers.
+	// Exit code -1 means signal kill with indeterminate status (heavy load).
 	var winners, denied []int
 	for i, r := range results {
 		switch r.exitCode {
-		case ExitOK, 143: // 143 = 128+SIGTERM (winner was killed)
+		case ExitOK, 143, -1: // 143 = 128+SIGTERM, -1 = signal kill under load
 			winners = append(winners, i)
 		case ExitLockHeld:
 			denied = append(denied, i)
@@ -238,12 +239,15 @@ func TestMultiProcessContention_Stability(t *testing.T) {
 
 			wg.Wait()
 
-			// Count winners and collect exit codes for diagnostics
+			// Count winners and collect exit codes for diagnostics.
+			// Exit code -1 means the process was killed by a signal but Go
+			// couldn't determine the code (happens under heavy load with -race).
+			// Treat it the same as 143 (SIGTERM) since we sent SIGTERM to the winner.
 			winners := 0
 			var exitCodes []int
 			for _, r := range results {
 				exitCodes = append(exitCodes, r.exitCode)
-				if r.exitCode == ExitOK || r.exitCode == 143 {
+				if r.exitCode == ExitOK || r.exitCode == 143 || r.exitCode == -1 {
 					winners++
 				}
 			}
