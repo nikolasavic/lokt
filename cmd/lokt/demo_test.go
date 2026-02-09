@@ -6,7 +6,30 @@ import (
 	"testing"
 )
 
-func TestCmdDemo_WritesScript(t *testing.T) {
+func TestCmdDemo_ListsDemos(t *testing.T) {
+	stdout, _, code := captureCmd(cmdDemo, nil)
+	if code != ExitOK {
+		t.Fatalf("expected exit 0, got %d", code)
+	}
+	if !strings.Contains(stdout, "hexwall") {
+		t.Error("should list hexwall demo")
+	}
+	if !strings.Contains(stdout, "trunk") {
+		t.Error("should list trunk demo")
+	}
+}
+
+func TestCmdDemo_UnknownDemo(t *testing.T) {
+	_, stderr, code := captureCmd(cmdDemo, []string{"bogus"})
+	if code != ExitUsage {
+		t.Fatalf("expected exit %d, got %d", ExitUsage, code)
+	}
+	if !strings.Contains(stderr, "unknown demo: bogus") {
+		t.Errorf("expected unknown demo error, got: %s", stderr)
+	}
+}
+
+func TestCmdDemoHexwall_WritesScript(t *testing.T) {
 	dir := t.TempDir()
 	orig, err := os.Getwd()
 	if err != nil {
@@ -17,7 +40,7 @@ func TestCmdDemo_WritesScript(t *testing.T) {
 	}
 	defer func() { _ = os.Chdir(orig) }()
 
-	stdout, _, code := captureCmd(cmdDemo, nil)
+	stdout, _, code := captureCmd(cmdDemo, []string{"hexwall"})
 	if code != ExitOK {
 		t.Fatalf("expected exit 0, got %d", code)
 	}
@@ -65,7 +88,7 @@ func TestCmdDemo_WritesScript(t *testing.T) {
 	}
 }
 
-func TestCmdDemo_OverwritesExisting(t *testing.T) {
+func TestCmdDemoHexwall_OverwritesExisting(t *testing.T) {
 	dir := t.TempDir()
 	orig, err := os.Getwd()
 	if err != nil {
@@ -81,7 +104,7 @@ func TestCmdDemo_OverwritesExisting(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 
-	_, _, code := captureCmd(cmdDemo, nil)
+	_, _, code := captureCmd(cmdDemo, []string{"hexwall"})
 	if code != ExitOK {
 		t.Fatalf("expected exit 0, got %d", code)
 	}
@@ -98,7 +121,7 @@ func TestCmdDemo_OverwritesExisting(t *testing.T) {
 	}
 }
 
-func TestCmdDemo_ScriptStructure(t *testing.T) {
+func TestCmdDemoHexwall_ScriptStructure(t *testing.T) {
 	// Verify the script constant directly without writing to disk.
 	if !strings.HasPrefix(hexwallScript, "#!/usr/bin/env bash") {
 		t.Error("hexwallScript should start with shebang")
@@ -121,6 +144,91 @@ func TestCmdDemo_ScriptStructure(t *testing.T) {
 	for _, s := range required {
 		if !strings.Contains(hexwallScript, s) {
 			t.Errorf("hexwallScript should contain %q", s)
+		}
+	}
+}
+
+func TestCmdDemoTrunk_WritesScript(t *testing.T) {
+	dir := t.TempDir()
+	orig, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	defer func() { _ = os.Chdir(orig) }()
+
+	stdout, _, code := captureCmd(cmdDemo, []string{"trunk"})
+	if code != ExitOK {
+		t.Fatalf("expected exit 0, got %d", code)
+	}
+
+	if !strings.Contains(stdout, "Wrote lokt-trunk-demo.sh") {
+		t.Errorf("expected stdout to mention filename, got: %s", stdout)
+	}
+
+	data, err := os.ReadFile("lokt-trunk-demo.sh")
+	if err != nil {
+		t.Fatalf("read script: %v", err)
+	}
+	content := string(data)
+
+	if !strings.HasPrefix(content, "#!/usr/bin/env bash") {
+		t.Error("script should start with #!/usr/bin/env bash")
+	}
+
+	info, err := os.Stat("lokt-trunk-demo.sh")
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	if info.Mode().Perm()&0o111 == 0 {
+		t.Error("script should be executable")
+	}
+
+	sections := []string{
+		"Configuration",
+		"Preflight",
+		"cycle.sh",
+		"Cleanup trap",
+		"Spawn agents",
+		"lokt guard",
+		"--no-lock",
+		"git pull --rebase",
+		"git push",
+		"verdict:",
+	}
+	for _, s := range sections {
+		if !strings.Contains(content, s) {
+			t.Errorf("script should contain %q", s)
+		}
+	}
+}
+
+func TestCmdDemoTrunk_ScriptStructure(t *testing.T) {
+	if !strings.HasPrefix(trunkScript, "#!/usr/bin/env bash") {
+		t.Error("trunkScript should start with shebang")
+	}
+	if !strings.HasSuffix(trunkScript, "\n") {
+		t.Error("trunkScript should end with newline")
+	}
+
+	required := []string{
+		"run_agent()",
+		"CYCLE_EOF",
+		"AGENT_PIDS=",
+		"trap cleanup EXIT",
+		"lokt guard",
+		"git init --bare",
+		"git clone",
+		"version.txt",
+		"changelog.txt",
+		"verdict: CLEAN",
+		"verdict: BROKEN",
+	}
+	for _, s := range required {
+		if !strings.Contains(trunkScript, s) {
+			t.Errorf("trunkScript should contain %q", s)
 		}
 	}
 }

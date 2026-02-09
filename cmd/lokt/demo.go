@@ -591,9 +591,31 @@ fi
 `
 
 func cmdDemo(args []string) int {
-	fs := flag.NewFlagSet("demo", flag.ExitOnError)
+	if len(args) == 0 {
+		fmt.Println("Available demos:")
+		fmt.Println("  hexwall    Hex wall concurrency demo")
+		fmt.Println("  trunk      AI agent trunk-based git workflow demo")
+		fmt.Println()
+		fmt.Println("Usage: lokt demo <name>")
+		return ExitOK
+	}
+
+	switch args[0] {
+	case "hexwall":
+		return cmdDemoHexwall(args[1:])
+	case "trunk":
+		return cmdDemoTrunk(args[1:])
+	default:
+		fmt.Fprintf(os.Stderr, "unknown demo: %s\n", args[0])
+		fmt.Fprintln(os.Stderr, "Available demos: hexwall, trunk")
+		return ExitUsage
+	}
+}
+
+func cmdDemoHexwall(args []string) int {
+	fs := flag.NewFlagSet("demo hexwall", flag.ExitOnError)
 	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, "usage: lokt demo")
+		fmt.Fprintln(os.Stderr, "usage: lokt demo hexwall")
 		fmt.Fprintln(os.Stderr, "")
 		fmt.Fprintln(os.Stderr, "Generate the hexwall demo script in the current directory.")
 		fmt.Fprintln(os.Stderr, "The generated script has its own flags — run it with --help to see them.")

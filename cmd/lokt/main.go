@@ -134,7 +134,7 @@ func usage() {
 	fmt.Println("  prime             Output agent context for AI tool integration")
 	fmt.Println("    --format name   Output format: claude-md, cursorrules, windsurfrules,")
 	fmt.Println("                    copilot, clinerules, aider")
-	fmt.Println("  demo              Generate hexwall demo script")
+	fmt.Println("  demo [name]       Generate a demo script (hexwall, trunk)")
 	fmt.Println("  version           Show version info")
 	fmt.Println()
 	fmt.Println("Exit codes:")
