@@ -41,6 +41,10 @@ const (
 	ExitUsage    = 64
 )
 
+// DefaultWaitTimeout is the default timeout applied when --wait is used without --timeout.
+// Prevents agents from hanging indefinitely if something goes wrong.
+const DefaultWaitTimeout = 10 * time.Minute
+
 func main() {
 	if len(os.Args) < 2 {
 		usage()
@@ -102,8 +106,8 @@ func usage() {
 	fmt.Println("Commands:")
 	fmt.Println("  lock <name>       Acquire a lock")
 	fmt.Println("    --ttl duration      Lock TTL (e.g., 5m, 1h)")
-	fmt.Println("    --wait              Wait for lock to be free")
-	fmt.Println("    --timeout duration  Maximum wait time (requires --wait)")
+	fmt.Println("    --wait              Wait for lock to be free (default timeout: 10m)")
+	fmt.Println("    --timeout duration  Maximum wait time (requires --wait, default: 10m)")
 	fmt.Println("    --json              Output JSON on acquire or deny")
 	fmt.Println("  unlock <name>     Release a lock")
 	fmt.Println("    --force         Remove without ownership check (break-glass)")
@@ -118,8 +122,8 @@ func usage() {
 	fmt.Println("  guard <name> -- <cmd...>")
 	fmt.Println("                    Run command while holding lock")
 	fmt.Println("    --ttl duration      Lock TTL (e.g., 5m, 1h)")
-	fmt.Println("    --wait              Wait for lock to be free")
-	fmt.Println("    --timeout duration  Maximum wait time (requires --wait)")
+	fmt.Println("    --wait              Wait for lock to be free (default timeout: 10m)")
+	fmt.Println("    --timeout duration  Maximum wait time (requires --wait, default: 10m)")
 	fmt.Println("  freeze <name>     Temporarily block guard commands")
 	fmt.Println("    --ttl duration      Freeze duration (required, e.g., 15m, 1h)")
 	fmt.Println("  unfreeze <name>   Remove a freeze early")
@@ -232,10 +236,12 @@ func cmdLock(args []string) int {
 		ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 		defer cancel()
 
-		if *timeout > 0 {
-			ctx, cancel = context.WithTimeout(ctx, *timeout)
-			defer cancel()
+		waitTimeout := *timeout
+		if waitTimeout == 0 {
+			waitTimeout = DefaultWaitTimeout
 		}
+		ctx, cancel = context.WithTimeout(ctx, waitTimeout)
+		defer cancel()
 
 		err = lock.AcquireWithWait(ctx, rootDir, name, opts)
 		if err != nil {
@@ -731,10 +737,12 @@ func cmdGuard(args []string) int {
 		ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 		defer cancel()
 
-		if *timeout > 0 {
-			ctx, cancel = context.WithTimeout(ctx, *timeout)
-			defer cancel()
+		waitTimeout := *timeout
+		if waitTimeout == 0 {
+			waitTimeout = DefaultWaitTimeout
 		}
+		ctx, cancel = context.WithTimeout(ctx, waitTimeout)
+		defer cancel()
 
 		err = lock.AcquireWithWait(ctx, rootDir, name, opts)
 		if err != nil {

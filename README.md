@@ -49,8 +49,8 @@ lokt doctor                    Validate lokt setup
 
 ```
 --ttl <duration>     Lock lifetime (e.g., 5m, 1h). Auto-renews under guard.
---wait               Block until the lock is free instead of failing immediately.
---timeout <duration> Maximum wait time (with --wait).
+--wait               Block until the lock is free instead of failing immediately (default timeout: 10m).
+--timeout <duration> Maximum wait time (with --wait, default: 10m).
 --break-stale        Remove a lock only if it's expired or the holder is dead.
 --force              Break-glass removal, no ownership check.
 --json               Machine-readable output.

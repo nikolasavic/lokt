@@ -674,3 +674,70 @@ func TestShowLockBrief_Freeze(t *testing.T) {
 		t.Errorf("expected [FROZEN] marker, got: %s", stdout)
 	}
 }
+
+// --- DefaultWaitTimeout ---
+
+func TestDefaultWaitTimeout_Value(t *testing.T) {
+	if DefaultWaitTimeout != 10*time.Minute {
+		t.Errorf("DefaultWaitTimeout = %v, want 10m", DefaultWaitTimeout)
+	}
+}
+
+func TestLock_WaitDefaultTimeout(t *testing.T) {
+	_, locksDir := setupTestRoot(t)
+
+	// Create a lock held by a different owner
+	writeLockJSON(t, locksDir, "wait-default.json", &lockfile.Lock{
+		Version:    1,
+		Name:       "wait-default",
+		Owner:      "blocker",
+		Host:       "other-host",
+		PID:        99999,
+		AcquiredAt: time.Now(),
+	})
+
+	// --wait without --timeout should apply DefaultWaitTimeout and eventually time out.
+	// We can't wait 10m in a test, so instead we verify the command doesn't return
+	// instantly (i.e., it enters the wait loop). We use --timeout 1s as the control.
+	start := time.Now()
+	_, stderr, code := captureCmd(cmdLock, []string{"--wait", "--timeout", "1s", "wait-default"})
+	elapsed := time.Since(start)
+
+	if code != ExitLockHeld {
+		t.Errorf("expected exit %d, got %d", ExitLockHeld, code)
+	}
+	if !strings.Contains(stderr, "timeout waiting for lock") {
+		t.Errorf("expected timeout message, got: %s", stderr)
+	}
+	if elapsed < 500*time.Millisecond {
+		t.Errorf("expected wait of ~1s, but returned in %v", elapsed)
+	}
+}
+
+func TestGuard_WaitDefaultTimeout(t *testing.T) {
+	_, locksDir := setupTestRoot(t)
+
+	// Create a lock held by a different owner
+	writeLockJSON(t, locksDir, "guard-wait-default.json", &lockfile.Lock{
+		Version:    1,
+		Name:       "guard-wait-default",
+		Owner:      "blocker",
+		Host:       "other-host",
+		PID:        99999,
+		AcquiredAt: time.Now(),
+	})
+
+	start := time.Now()
+	_, stderr, code := captureCmd(cmdGuard, []string{"--wait", "--timeout", "1s", "guard-wait-default", "--", "true"})
+	elapsed := time.Since(start)
+
+	if code != ExitLockHeld {
+		t.Errorf("expected exit %d, got %d", ExitLockHeld, code)
+	}
+	if !strings.Contains(stderr, "timeout waiting for lock") {
+		t.Errorf("expected timeout message, got: %s", stderr)
+	}
+	if elapsed < 500*time.Millisecond {
+		t.Errorf("expected wait of ~1s, but returned in %v", elapsed)
+	}
+}
